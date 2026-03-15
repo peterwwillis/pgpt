@@ -135,9 +135,47 @@ jobs:
           path: ${{ steps.binary.outputs.name }}
           retention-days: 1
 
+  android:
+    name: Build Android APK
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Install fyne-cross
+        run: |
+          go install github.com/fyne-io/fyne-cross@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Build APK
+        run: |
+          fyne-cross android -app-id com.zop.app -arch arm64 ./cmd/zop-mobile
+          APK_PATH=$(find fyne-cross/dist/android -name "*.apk" -print -quit)
+          if [ -z "$APK_PATH" ]; then
+            echo "APK not found in fyne-cross/dist/android" >&2
+            exit 1
+          fi
+          cp "$APK_PATH" "zop-android-arm64.apk"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zop-android-arm64.apk
+          path: zop-android-arm64.apk
+          retention-days: 1
+
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [build, android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

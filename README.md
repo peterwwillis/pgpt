@@ -139,6 +139,44 @@ and a Whisper model file. Set `ZOP_WHISPER_MODEL` to point to the model path
 To build a smaller binary without Whisper support, omit the build tag (or grab
 release artifacts suffixed with `-nowhisper`).
 
+## Mobile Roadmap
+
+See [ANDROID_FYNE_PLAN.md](ANDROID_FYNE_PLAN.md) for the design and implementation
+plan for the Android (Fyne) port, including the development checklist and build
+workflow.
+
+## Android App (Fyne)
+
+Download the `zop-android-arm64.apk` asset from the latest GitHub Release, or
+build it locally with `fyne-cross`:
+
+```sh
+go install github.com/fyne-io/fyne-cross@latest
+fyne-cross android -app-id com.zop.app -arch arm64 ./cmd/zop-mobile
+```
+
+The APK will be created under `fyne-cross/dist/android/`. Copy it to a friendly
+location (for example `zop-android-arm64.apk`) before installing.
+
+### Install on a physical Android device (e.g., Samsung Galaxy S10e)
+
+1. Enable Developer Options on the device and turn on **USB debugging**.
+2. Install the Android Platform Tools (`adb`) on your workstation.
+3. Connect the phone over USB and approve the debugging prompt.
+4. Verify the device is visible:
+   ```sh
+   adb devices
+   ```
+5. Install (or update) the APK:
+   ```sh
+   adb install -r /path/to/zop-android-arm64.apk
+   ```
+
+To uninstall later:
+```sh
+adb uninstall com.zop.app
+```
+
 ## Development
 
 ```sh
