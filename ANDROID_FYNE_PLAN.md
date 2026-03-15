@@ -11,7 +11,8 @@ The Android app will use an all-Go stack to reduce context switching between
 languages and simplify maintenance.
 
 - **GUI Framework**: Fyne (v2.x)
-- **Audio Capture**: `malgo` or `oto` (Go MiniAudio wrappers)
+- **Audio Capture**: `malgo` (recommended for microphone input); reserve `oto`
+  for playback if needed, since it is primarily output-focused.
 - **Inference Engine**: whisper.cpp via CGO bindings (existing `internal/whisper`)
 - **Cross-Compilation Tool**: `fyne-cross` (Docker-based)
 
@@ -23,7 +24,9 @@ The interface is a single-page reactive layout.
   - Status indicator label ("Idle", "Listening", "Processing")
   - Configuration button (opens a dedicated settings window)
 - **Center**
-  - Scrollable read-only `widget.Entry` (multi-line) for transcriptions/chat
+  - Scrollable read-only `widget.Entry` (disabled) for transcriptions/chat to
+    enable selection/copy; fall back to a wrapped `widget.Label` if performance
+    or memory usage becomes an issue.
 - **Center-bottom**
   - Text entry box for user prompts
 - **Bottom Bar**
@@ -43,7 +46,8 @@ The interface is a single-page reactive layout.
 3. Validate Fyne works locally with a minimal sample app.
 
 ### Phase 2: App Scaffolding & Core Logic
-1. Initialize a Fyne app package (new `cmd/zop-mobile` or `internal/app`).
+1. Initialize a Fyne app entrypoint under `cmd/zop-mobile` (consistent with the
+   existing `cmd/zop` layout). Use `internal/app` for shared UI helpers if needed.
 2. Refactor CLI entry points to reuse a shared controller layer:
    - Prompt execution logic from `internal/cli`
    - Provider invocation (`internal/provider`)
