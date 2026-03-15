@@ -48,6 +48,9 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Build
+        run: go build ./...
+
       - name: Test
         run: go test ${{ matrix.test_args }} ./...
 
@@ -58,3 +61,76 @@ jobs:
           name: coverage
           path: coverage.out
           retention-days: 7
+
+  screenshot:
+    name: Capture UI screenshot
+    if: github.event_name == 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Capture screenshot
+        env:
+          ZOP_SCREENSHOT_PATH: ${{ github.workspace }}/artifacts/zop-mobile-ui.png
+        run: |
+          mkdir -p artifacts
+          go test -tags fyne ./internal/mobileui -run TestScreenshot -count=1
+
+      - name: Upload screenshot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshot
+          path: artifacts/zop-mobile-ui.png
+          retention-days: 7
+
+      - name: Publish screenshot to branch
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin ui-screenshots || true
+          if git show-ref --quiet refs/remotes/origin/ui-screenshots; then
+            git switch ui-screenshots
+            git reset --hard origin/ui-screenshots
+          else
+            git switch --orphan ui-screenshots
+            git rm -rf . || true
+          fi
+
+          mkdir -p "pr-${PR_NUMBER}"
+          cp "${{ github.workspace }}/artifacts/zop-mobile-ui.png" "pr-${PR_NUMBER}/zop-mobile-ui.png"
+          git add "pr-${PR_NUMBER}/zop-mobile-ui.png"
+
+          if git diff --cached --quiet; then
+            echo "No screenshot changes to commit."
+          else
+            git commit -m "Add UI screenshot for PR #${PR_NUMBER}"
+            git push origin ui-screenshots
+          fi
+
+      - name: Comment PR with screenshot
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: zop-mobile-ui
+          message: |
+            ### Mobile UI Screenshot
+            ![zop mobile UI](https://raw.githubusercontent.com/${{ github.repository }}/ui-screenshots/pr-${{ github.event.pull_request.number }}/zop-mobile-ui.png)

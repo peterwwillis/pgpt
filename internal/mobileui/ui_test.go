@@ -36,7 +36,13 @@ func TestScreenshot(t *testing.T) {
 	}
 
 	window.Canvas().Refresh(window.Content())
-	imageFile := filepath.Join(os.TempDir(), "zop-mobile-ui.png")
+	imageFile := os.Getenv("ZOP_SCREENSHOT_PATH")
+	if imageFile == "" {
+		imageFile = filepath.Join(os.TempDir(), "zop-mobile-ui.png")
+	}
+	if err := os.MkdirAll(filepath.Dir(imageFile), 0755); err != nil {
+		t.Fatalf("create screenshot directory: %v", err)
+	}
 	file, err := os.Create(imageFile)
 	if err != nil {
 		t.Fatalf("create screenshot: %v", err)
