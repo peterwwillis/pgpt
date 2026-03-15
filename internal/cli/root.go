@@ -48,10 +48,8 @@ The prompt can be supplied as:
   - Prompt flag:  zop -p "hello"
   - Command-line argument:  zop "hello"
   - Standard input (pipe):  echo "hello" | zop
-  - Microphone (if compiled with -tags whisper):  zop --voice
-
-Interactive sessions keep a chat open for multiple prompts:  zop --interactive`,
-		Example: `  zop -p "What is the capital of France?"
+  - Microphone (whisper-enabled builds):  zop --voice`,
+		Example: `  zop "What is the capital of France?"
   echo "Explain recursion" | zop
   zop --agent claude "Review this code"
   zop --chat mysession "Continue our conversation"
@@ -74,7 +72,7 @@ Interactive sessions keep a chat open for multiple prompts:  zop --interactive`,
 	root.Flags().StringP("system", "S", "", "system prompt override")
 	root.Flags().BoolP("interactive", "i", false, "interactive chat session")
 	root.Flags().BoolP("stream", "s", false, "stream response to stdout")
-	root.Flags().BoolP("voice", "V", false, "record prompt from microphone (requires -tags whisper)")
+	root.Flags().BoolP("voice", "V", false, "record prompt from microphone (requires whisper-enabled build)")
 
 	// Subcommands
 	root.AddCommand(newChatCmd(gf))
