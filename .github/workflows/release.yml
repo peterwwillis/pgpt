@@ -107,7 +107,7 @@ jobs:
       - name: Fetch whisper.cpp
         if: ${{ matrix.whisper }}
         run: |
-          git clone --depth 1 https://github.com/ggerganov/whisper.cpp internal/whisper/whisper.cpp
+          git clone --depth 1 --branch v1.8.3 https://github.com/ggerganov/whisper.cpp internal/whisper/whisper.cpp
           make -C internal/whisper/whisper.cpp libwhisper.a
 
       - name: Build
@@ -118,12 +118,12 @@ jobs:
           CGO_ENABLED: ${{ matrix.cgo }}
         run: |
           TAGS="${{ matrix.tags }}"
-          TAG_ARGS=""
+          TAG_ARGS=()
           if [ -n "$TAGS" ]; then
-            TAG_ARGS="-tags ${TAGS}"
+            TAG_ARGS=(-tags "$TAGS")
           fi
           go build \
-            ${TAG_ARGS} \
+            "${TAG_ARGS[@]}" \
             -ldflags="-s -w -X github.com/peterwwillis/zop/internal/cli.Version=${{ github.ref_name }}" \
             -o "${{ steps.binary.outputs.name }}" \
             ./cmd/zop
