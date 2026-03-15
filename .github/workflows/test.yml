@@ -28,7 +28,7 @@ jobs:
           # On Linux collect a coverage profile; on Windows omit it to avoid a
           # PowerShell/Go incompatibility where `-coverprofile=coverage.out ./...`
           # causes Go to try to build ".out" as a package.
-          - os: ubuntu-latest
+          - os: ubuntu-slim
             test_args: "-race -coverprofile=coverage.out"
           - os: windows-latest
             test_args: "-race"
@@ -61,7 +61,7 @@ jobs:
 
   android:
     name: Android cross-compilation (android/arm64)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     steps:
       - uses: actions/checkout@v4
