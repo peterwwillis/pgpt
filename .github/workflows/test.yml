@@ -162,14 +162,8 @@ jobs:
         shell: bash
         run: |
           NAME="zop-${{ matrix.goos }}-${{ matrix.goarch }}"
-          if [ "${{ matrix.goarm }}" != "" ]; then
-            NAME="${NAME}v${{ matrix.goarm }}"
-          fi
           if [ "${{ matrix.suffix }}" != "" ]; then
             NAME="${NAME}${{ matrix.suffix }}"
-          fi
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            NAME="${NAME}.exe"
           fi
           echo "name=${NAME}" >> "$GITHUB_OUTPUT"
 
@@ -190,7 +184,6 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          GOARM: ${{ matrix.goarm }}
           CGO_ENABLED: ${{ matrix.cgo }}
         run: |
           TAGS="${{ matrix.tags }}"
