@@ -22,7 +22,7 @@ permissions:
 jobs:
   resolve-tag:
     name: Resolve release tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
@@ -60,7 +60,7 @@ jobs:
   test:
     name: Test before release
     needs: resolve-tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v4
         with:
@@ -84,7 +84,7 @@ jobs:
   build:
     name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
     needs: [resolve-tag, test]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     strategy:
       matrix:
         include:
@@ -103,24 +103,30 @@ jobs:
             whisper: false
           - goos: linux
             goarch: arm64
-            cgo: "0"
-            tags: ""
-            suffix: "-nowhisper"
-            whisper: false
-          # Windows (no-whisper only for now)
-          - goos: windows
-            goarch: amd64
-            cgo: "0"
-            tags: ""
-            suffix: "-nowhisper"
-            whisper: false
-          - goos: windows
+            cgo: "1"
+            tags: "whisper"
+            suffix: ""
+            whisper: true
+          - goos: linux
             goarch: arm64
             cgo: "0"
             tags: ""
             suffix: "-nowhisper"
             whisper: false
-          # macOS builds are intentionally excluded until a self-hosted runner is provided.
+          # Windows (no-whisper only for now)
+          #- goos: windows
+          #  goarch: amd64
+          #  cgo: "0"
+          #  tags: ""
+          #  suffix: "-nowhisper"
+          #  whisper: false
+          #- goos: windows
+          #  goarch: arm64
+          #  cgo: "0"
+          #  tags: ""
+          #  suffix: "-nowhisper"
+          #  whisper: false
+          ## macOS builds are intentionally excluded until a self-hosted runner is provided.
 
     steps:
       - uses: actions/checkout@v4
@@ -239,7 +245,7 @@ jobs:
   release:
     name: Create GitHub Release
     needs: [resolve-tag, build, android]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v4
         with:
