@@ -240,7 +240,7 @@ jobs:
             echo "APK not found under fyne-cross/dist" >&2
             exit 1
           fi
-          cp "$APK_PATH" "zop-android-arm64.apk"
+          cp "$APK_PATH" "zop-android-${RELEASE_ANDROID_ARCH}.apk"
 
   screenshot:
     name: Capture UI screenshot
