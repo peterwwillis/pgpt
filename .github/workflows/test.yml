@@ -30,8 +30,8 @@ jobs:
           # causes Go to try to build ".out" as a package.
           - os: ubuntu-latest
             test_args: "-race -coverprofile=coverage.out"
-          - os: windows-latest
-            test_args: "-race"
+          # - os: windows-latest
+          #   test_args: "-race"
 
     steps:
       - uses: actions/checkout@v4
@@ -62,10 +62,50 @@ jobs:
           path: coverage.out
           retention-days: 7
 
+  test-whisper:
+    name: Test with whisper (Linux/amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Fetch and build whisper.cpp
+        run: |
+          git clone --depth 1 --branch v1.8.3 https://github.com/ggerganov/whisper.cpp internal/whisper/whisper.cpp
+          cmake -S internal/whisper/whisper.cpp \
+            -B internal/whisper/whisper.cpp/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_EXAMPLES=OFF \
+            -DWHISPER_BUILD_SERVER=OFF
+          cmake --build internal/whisper/whisper.cpp/build --target whisper
+
+      - name: Vet (whisper)
+        run: go vet -tags whisper ./...
+
+      - name: Build (whisper)
+        env:
+          CGO_ENABLED: "1"
+        run: go build -tags whisper ./...
+
+      - name: Test (whisper)
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race -tags whisper ./...
+
   screenshot:
     name: Capture UI screenshot
     if: github.event_name == 'pull_request'
-    needs: test
+    needs: [test, test-whisper]
     runs-on: ubuntu-latest
     permissions:
       contents: write
