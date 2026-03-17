@@ -6,13 +6,15 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <application
-        android:label="@string/app_name"
-        android:icon="@mipmap/ic_launcher">
+        android:label="@string/app_name">
         <activity
             android:name="org.golang.app.GoNativeActivity"
             android:label="@string/app_name"
             android:configChanges="keyboardHidden|orientation|screenSize"
             android:exported="true">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="gojni" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
