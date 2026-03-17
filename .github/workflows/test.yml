@@ -161,10 +161,7 @@ jobs:
         id: binary
         shell: bash
         run: |
-          NAME="zop-${{ matrix.goos }}-${{ matrix.goarch }}"
-          if [ "${{ matrix.suffix }}" != "" ]; then
-            NAME="${NAME}${{ matrix.suffix }}"
-          fi
+          NAME="zop-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}"
           echo "name=${NAME}" >> "$GITHUB_OUTPUT"
 
       - name: Fetch whisper.cpp
