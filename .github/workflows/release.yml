@@ -4,21 +4,67 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v1.2.3). Must already exist in the repository."
+        required: true
+        type: string
 
 # Only allow one release workflow per tag to run at a time.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
+  resolve-tag:
+    name: Resolve release tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            # Validate: must be non-empty and contain only safe tag characters
+            if [ -z "$INPUT_TAG" ] || printf '%s' "$INPUT_TAG" | grep -qE '[^a-zA-Z0-9._/\-]'; then
+              echo "Error: tag input contains invalid characters." >&2
+              exit 1
+            fi
+            printf 'tag=%s\n' "$INPUT_TAG" >> "$GITHUB_OUTPUT"
+          else
+            printf 'tag=%s\n' "$REF_NAME" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate tag exists
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          if ! git rev-parse --verify "refs/tags/${RELEASE_TAG}" > /dev/null 2>&1; then
+            echo "Error: tag '${RELEASE_TAG}' does not exist in the repository." >&2
+            exit 1
+          fi
+
   test:
     name: Test before release
+    needs: resolve-tag
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-tag.outputs.tag }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -37,7 +83,7 @@ jobs:
 
   build:
     name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
-    needs: test
+    needs: [resolve-tag, test]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -78,6 +124,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-tag.outputs.tag }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -131,7 +179,7 @@ jobs:
           fi
           go build \
             "${TAG_ARGS[@]}" \
-            -ldflags="-s -w -X github.com/peterwwillis/zop/internal/cli.Version=${{ github.ref_name }}" \
+            -ldflags="-s -w -X github.com/peterwwillis/zop/internal/cli.Version=${{ needs.resolve-tag.outputs.tag }}" \
             -o "${{ steps.binary.outputs.name }}" \
             ./cmd/zop
 
@@ -144,10 +192,12 @@ jobs:
 
   android:
     name: Build Android APK
-    needs: test
+    needs: [resolve-tag, test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-tag.outputs.tag }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -182,12 +232,13 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [build, android]
+    needs: [resolve-tag, build, android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ needs.resolve-tag.outputs.tag }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4.1.8
@@ -201,7 +252,8 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.resolve-tag.outputs.tag }}
           files: dist/*
           generate_release_notes: true
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(needs.resolve-tag.outputs.tag, '-') }}
