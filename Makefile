@@ -31,6 +31,11 @@ _go_ext := $(if $(filter windows,$(_HOST_OS)),.zip,.tar.gz)
 _go_pkg := go$(GO_VERSION).$(_HOST_OS)-$(_HOST_ARCH)$(_go_ext)
 _go_url := https://go.dev/dl/$(_go_pkg)
 
+# Prepend the installed Go bin dir to PATH for every recipe.
+# If setup-go has not been run yet, the dir won't exist and make falls
+# back to whatever 'go' is already on the system PATH.
+export PATH := $(GO_INSTALL_DIR)/bin:$(PATH)
+
 # ==============================================================
 # Variables — all overridable from the command line or environment
 # ==============================================================
