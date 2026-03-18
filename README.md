@@ -159,6 +159,7 @@ The default build includes **Whisper voice support** (fetches and compiles
 ```sh
 make deps    # download Go module dependencies
 make build   # build all packages with -tags whisper
+make build-local  # build runnable local binary at ./zop
 ```
 
 Or run both in one shot:
@@ -223,6 +224,7 @@ Output: `zop-android-arm64.apk`
 | `make setup-go` | Download & install Go from `go.mod` |
 | `make deps` | `go mod download` |
 | `make build` | Build all packages (whisper by default) |
+| `make build-local` | Build local runnable CLI binary at `./zop` |
 | `make test` | Run tests (whisper by default) |
 | `make vet` | Run `go vet` |
 | `make build-bin` | Build release binary for current platform |

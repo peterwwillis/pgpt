@@ -1,5 +1,7 @@
 package whisper
 
+import "math"
+
 func bytesToInt16(raw []byte) []int16 {
 	n := len(raw) / 2
 	out := make([]int16, n)
@@ -10,24 +12,50 @@ func bytesToInt16(raw []byte) []int16 {
 	return out
 }
 
-// hasSpeech reports whether the RMS amplitude of samples meets or exceeds
-// threshold. Using RMS rather than peak amplitude prevents isolated noise
-// spikes from resetting the silence timer on every frame.
-//
-// The comparison is done in squared units to avoid a sqrt:
-//
-//	rms >= threshold  ⟺  sum(s²)/len >= threshold²
+// hasSpeech reports whether any sample in the frame reaches threshold.
 func hasSpeech(samples []int16, threshold int16) bool {
+	for _, sample := range samples {
+		// Convert to int32 before taking abs so -32768 is handled correctly.
+		v := int32(sample)
+		if v < 0 {
+			v = -v
+		}
+		if v >= int32(threshold) {
+			return true
+		}
+	}
+	return false
+}
+
+// rmsAmplitude returns the root-mean-square amplitude for an audio frame.
+func rmsAmplitude(samples []int16) float64 {
 	if len(samples) == 0 {
-		return false
+		return 0
 	}
-	var sum int64
+
+	var sumSq float64
 	for _, s := range samples {
-		v := int64(s)
-		sum += v * v
+		v := float64(s)
+		sumSq += v * v
 	}
-	t := int64(threshold)
-	return sum >= t*t*int64(len(samples))
+
+	return math.Sqrt(sumSq / float64(len(samples)))
+}
+
+// rmsAmplitudeFloat32 returns the root-mean-square amplitude for normalized
+// float32 audio frames.
+func rmsAmplitudeFloat32(samples []float32) float64 {
+	if len(samples) == 0 {
+		return 0
+	}
+
+	var sumSq float64
+	for _, s := range samples {
+		v := float64(s)
+		sumSq += v * v
+	}
+
+	return math.Sqrt(sumSq / float64(len(samples)))
 }
 
 func int16ToPCMFloat(samples []int16) []float32 {

@@ -24,6 +24,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -107,11 +108,33 @@ const (
 	captureChannels         = 1
 	captureMaxDuration      = 30 * time.Second
 	captureStopAfterSilence = 1200 * time.Millisecond
-	// captureSpeechThreshold is an RMS amplitude threshold (int16 units).
-	// Background noise in a quiet room is typically 100–300 RMS; conversational
-	// speech is 1 000–5 000+. 800 sits comfortably between the two, so ambient
-	// hiss or HVAC hum won't prevent the silence timer from advancing.
-	captureSpeechThreshold = 800
+
+	// Adaptive VAD constants.
+	//
+	// noiseRMS is tracked with an EWMA. We start speech when frame RMS rises above
+	// (noiseRMS * startMult + startOffset) for at least speechStartMin, and we
+	// consider speech ended when it stays below (noiseRMS * stopMult + stopOffset)
+	// for speechEndHangover. The start threshold is intentionally higher than the
+	// stop threshold to provide hysteresis and avoid chatter on noisy microphones.
+	captureNoiseEWMAAlpha = 0.08
+
+	// On some mics, speech RMS is only slightly above baseline RMS, so keep
+	// thresholds close to the tracked noise floor.
+	captureSpeechStartMult   = 1.02
+	captureSpeechStartOffset = 60.0
+	captureSpeechStartMin    = 1 * time.Millisecond
+
+	captureSpeechStopMult    = 1.005
+	captureSpeechStopOffset  = 20.0
+	captureSpeechEndHangover = 220 * time.Millisecond
+	// Keep the speech stop threshold close to the session peak so recordings can
+	// end even when the microphone baseline is unusually hot/noisy.
+	captureSpeechPeakStopRatio = 0.94
+	captureSpeechPeakDecay     = 0.99990
+
+	// Minimum RMS threshold guard so near-silent environments don't collapse
+	// thresholds to zero.
+	captureMinThreshold = 300.0
 )
 
 // RecordAndTranscribe records audio from the default microphone and transcribes
@@ -152,7 +175,7 @@ func RecordAndTranscribe() (string, error) {
 		}
 	}()
 
-	fmt.Fprintln(os.Stderr, "Recording… press Ctrl-D to stop, or wait for silence to stop automatically.")
+	fmt.Fprintln(os.Stderr, "Recording… press Ctrl-D to stop, or pause to auto-stop.")
 	pcm, err := captureAudioPCM(sigCtx, captureMaxDuration, captureStopAfterSilence)
 	if err != nil {
 		return "", fmt.Errorf("capturing audio: %w", err)
@@ -193,14 +216,14 @@ func RecordAndTranscribe() (string, error) {
 	return text, nil
 }
 
-// bytesToInt16View creates a zero-allocation int16 view over a byte slice.
+// bytesToFloat32View creates a zero-allocation float32 view over a byte slice.
 // The returned slice is only valid as long as the underlying byte slice is valid.
 // It is safe to use within the callback as we copy the data out before returning.
-func bytesToInt16View(b []byte) []int16 {
+func bytesToFloat32View(b []byte) []float32 {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*int16)(unsafe.Pointer(&b[0])), len(b)/2)
+	return unsafe.Slice((*float32)(unsafe.Pointer(&b[0])), len(b)/4)
 }
 
 func captureAudioPCM(ctx context.Context, maxDuration, silenceDuration time.Duration) ([]float32, error) {
@@ -214,19 +237,39 @@ func captureAudioPCM(ctx context.Context, maxDuration, silenceDuration time.Dura
 	}()
 
 	cfg := malgo.DefaultDeviceConfig(malgo.Capture)
-	cfg.Capture.Format = malgo.FormatS16
+	cfg.Capture.Format = malgo.FormatF32
 	cfg.Capture.Channels = captureChannels
 	cfg.SampleRate = captureSampleRate
 
+	durationToSamples := func(d time.Duration) int64 {
+		s := int64(captureSampleRate) * int64(d) / int64(time.Second)
+		if s < 1 {
+			return 1
+		}
+		return s
+	}
+	vadDebug := os.Getenv("ZOP_DEBUG_VAD") == "1"
+
 	var (
-		mu              sync.Mutex
-		samples         []int16
-		detectedSpeech  bool
-		totalSamples    int64 // total samples captured across all channels
+		mu               sync.Mutex
+		samples          []float32
+		detectedSpeech   bool
+		speechActive     bool
+		speechPeakRMS    float64
+		totalSamples     int64
 		lastSpeechSample int64
-		stopOnce        sync.Once
-		done            = make(chan struct{})
+		speechAboveStart int64
+		speechBelowStop  int64
+		stopOnce         sync.Once
+		done             = make(chan struct{})
+
+		noiseRMS         float64
+		noiseInitialized bool
+		lastDebugSample  int64
 	)
+	speechStartSamples := durationToSamples(captureSpeechStartMin)
+	speechEndSamples := durationToSamples(captureSpeechEndHangover)
+	debugEverySamples := durationToSamples(250 * time.Millisecond)
 
 	stopCapture := func() {
 		stopOnce.Do(func() {
@@ -236,7 +279,7 @@ func captureAudioPCM(ctx context.Context, maxDuration, silenceDuration time.Dura
 
 	deviceCallbacks := malgo.DeviceCallbacks{
 		Data: func(_, input []byte, _ uint32) {
-			frameSamples := bytesToInt16View(input)
+			frameSamples := bytesToFloat32View(input)
 			if len(frameSamples) == 0 {
 				return
 			}
@@ -244,23 +287,68 @@ func captureAudioPCM(ctx context.Context, maxDuration, silenceDuration time.Dura
 			mu.Lock()
 			samples = append(samples, frameSamples...)
 
-			// Number of frames in this callback (per channel).
 			frameCount := int64(len(frameSamples)) / int64(captureChannels)
 			if frameCount <= 0 {
 				mu.Unlock()
 				return
 			}
-
-			// Update sample counters.
-			totalSamplesBefore := totalSamples
 			totalSamples += frameCount
 
-			if hasSpeech(frameSamples, captureSpeechThreshold) {
-				detectedSpeech = true
-				lastSpeechSample = totalSamples
+			// Keep VAD thresholds in int16-equivalent units for easier tuning.
+			frameRMS := rmsAmplitudeFloat32(frameSamples) * 32768.0
+
+			if !noiseInitialized {
+				noiseRMS = frameRMS
+				noiseInitialized = true
+			}
+			// Some devices emit one or more all-zero warmup frames. If that happens,
+			// seed noiseRMS as soon as we observe a real signal so thresholds aren't
+			// stuck at the minimum.
+			if noiseRMS < 1 && frameRMS > captureMinThreshold {
+				noiseRMS = frameRMS
 			}
 
-			// Convert sample counts to durations using the known sample rate.
+			startThreshold := math.Max(captureMinThreshold, noiseRMS*captureSpeechStartMult+captureSpeechStartOffset)
+			stopThreshold := math.Max(captureMinThreshold, noiseRMS*captureSpeechStopMult+captureSpeechStopOffset)
+
+			if !speechActive {
+				if frameRMS >= startThreshold {
+					speechAboveStart += frameCount
+					if speechAboveStart >= speechStartSamples {
+						speechActive = true
+						detectedSpeech = true
+						speechPeakRMS = frameRMS
+						lastSpeechSample = totalSamples
+						speechAboveStart = 0
+						speechBelowStop = 0
+					}
+				} else {
+					speechAboveStart = 0
+					// Only update ambient noise estimate while not in speech.
+					noiseRMS += captureNoiseEWMAAlpha * (frameRMS - noiseRMS)
+				}
+			} else {
+				if frameRMS > speechPeakRMS {
+					speechPeakRMS = frameRMS
+				} else {
+					// Decay very slowly so peak-relative stop threshold stays useful
+					// during short pauses even with noisy microphones.
+					speechPeakRMS *= captureSpeechPeakDecay
+				}
+
+				effectiveStopThreshold := math.Max(stopThreshold, speechPeakRMS*captureSpeechPeakStopRatio)
+				if frameRMS >= effectiveStopThreshold {
+					speechBelowStop = 0
+					lastSpeechSample = totalSamples
+				} else {
+					speechBelowStop += frameCount
+					if speechBelowStop >= speechEndSamples {
+						speechActive = false
+						speechBelowStop = 0
+					}
+				}
+			}
+
 			sampleRate := int64(captureSampleRate)
 			elapsedSinceStart := time.Duration(totalSamples) * time.Second / time.Duration(sampleRate)
 
@@ -268,15 +356,29 @@ func captureAudioPCM(ctx context.Context, maxDuration, silenceDuration time.Dura
 			if detectedSpeech {
 				silenceSamples := totalSamples - lastSpeechSample
 				if silenceSamples < 0 {
-					// Should not happen, but guard against negative durations.
 					silenceSamples = 0
 				}
 				elapsedSinceLastSpeech = time.Duration(silenceSamples) * time.Second / time.Duration(sampleRate)
 			}
 
+			if vadDebug && totalSamples-lastDebugSample >= debugEverySamples {
+				fmt.Fprintf(
+					os.Stderr,
+					"[zop] vad rms=%.1f noise=%.1f start=%.1f stop=%.1f peak=%.1f active=%t detected=%t silence_ms=%d\n",
+					frameRMS,
+					noiseRMS,
+					startThreshold,
+					math.Max(stopThreshold, speechPeakRMS*captureSpeechPeakStopRatio),
+					speechPeakRMS,
+					speechActive,
+					detectedSpeech,
+					elapsedSinceLastSpeech/time.Millisecond,
+				)
+				lastDebugSample = totalSamples
+			}
+
 			reachedMaxDuration := elapsedSinceStart >= maxDuration
-			reachedSilenceStop := detectedSpeech && elapsedSinceLastSpeech >= silenceDuration
-			_ = totalSamplesBefore // kept to preserve potential future use without changing semantics
+			reachedSilenceStop := detectedSpeech && !speechActive && elapsedSinceLastSpeech >= silenceDuration
 			shouldStop := reachedMaxDuration || reachedSilenceStop
 			mu.Unlock()
 
@@ -316,8 +418,8 @@ func captureAudioPCM(ctx context.Context, maxDuration, silenceDuration time.Dura
 	// checks for empty audio and surfaces a clear error in that case.
 
 	mu.Lock()
-	recorded := append([]int16(nil), samples...)
+	recorded := append([]float32(nil), samples...)
 	mu.Unlock()
 
-	return int16ToPCMFloat(recorded), nil
+	return recorded, nil
 }
