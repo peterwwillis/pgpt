@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (e.g. v1.2.3). Must already exist in the repository."
+        description: "Tag to release (e.g. v1.2.3). If missing, it will be created automatically."
         required: true
         type: string
 
@@ -22,6 +22,7 @@ permissions:
 jobs:
   resolve-tag:
     name: Resolve release tag
+    if: github.event_name != 'push' || github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
@@ -48,14 +49,25 @@ jobs:
             printf 'tag=%s\n' "$REF_NAME" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Validate tag exists
+      - name: Ensure tag exists
         env:
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
+          GITHUB_SHA: ${{ github.sha }}
         run: |
-          if ! git rev-parse --verify "refs/tags/${RELEASE_TAG}" > /dev/null 2>&1; then
+          if git rev-parse --verify "refs/tags/${RELEASE_TAG}" > /dev/null 2>&1; then
+            echo "Tag '${RELEASE_TAG}' already exists."
+            exit 0
+          fi
+
+          if [ "$EVENT_NAME" != "workflow_dispatch" ]; then
             echo "Error: tag '${RELEASE_TAG}' does not exist in the repository." >&2
             exit 1
           fi
+
+          echo "Tag '${RELEASE_TAG}' does not exist; creating it at commit ${GITHUB_SHA}."
+          git tag "${RELEASE_TAG}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${RELEASE_TAG}"
 
   test:
     name: Test before release
