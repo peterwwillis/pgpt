@@ -139,9 +139,9 @@ const (
 	captureNoiseEWMAAlpha = 0.08
 	captureNoiseWarmup    = 400 * time.Millisecond
 
-	captureSpeechStartDB  = 5.0
-	captureSpeechStopDB   = 2.0
-	captureSpeechStartMin = 120 * time.Millisecond
+	captureSpeechStartDB     = 5.0
+	captureSpeechStopDB      = 2.0
+	captureSpeechStartMin    = 120 * time.Millisecond
 	captureSpeechEndHangover = 220 * time.Millisecond
 
 	// Floors to avoid divide-by-zero/near-zero instability.
@@ -153,13 +153,23 @@ const (
 // it using the local Whisper model. If the model file does not exist it is
 // downloaded first.
 func RecordAndTranscribe() (string, error) {
-	return RecordAndTranscribeWithProgress(nil)
+	return recordAndTranscribe(nil, true)
 }
 
 // RecordAndTranscribeWithProgress records audio and transcribes it with Whisper.
 // If progress is non-nil, it receives lifecycle messages suitable for verbose
 // stderr logging by callers.
 func RecordAndTranscribeWithProgress(progress func(string)) (string, error) {
+	return recordAndTranscribe(progress, true)
+}
+
+// RecordAndTranscribeManualWithProgress records audio and transcribes it with
+// Whisper, but disables silence auto-stop. Recording ends when Ctrl-D is sent.
+func RecordAndTranscribeManualWithProgress(progress func(string)) (string, error) {
+	return recordAndTranscribe(progress, false)
+}
+
+func recordAndTranscribe(progress func(string), stopOnSilence bool) (string, error) {
 	modelPath := defaultModelPath()
 
 	if err := ensureModel(modelPath); err != nil {
@@ -195,8 +205,12 @@ func RecordAndTranscribeWithProgress(progress func(string)) (string, error) {
 		}
 	}()
 
-	fmt.Fprintln(os.Stderr, "Recording… calibrating noise floor briefly, then speak (Ctrl-D to stop).")
-	pcm, err := captureAudioPCM(sigCtx, captureMaxDuration, captureStopAfterSilence)
+	if stopOnSilence {
+		fmt.Fprintln(os.Stderr, "Recording… calibrating noise floor briefly, then speak (Ctrl-D to stop).")
+	} else {
+		fmt.Fprintln(os.Stderr, "Recording… silence auto-stop disabled; press Ctrl-D when ready.")
+	}
+	pcm, err := captureAudioPCM(sigCtx, captureMaxDuration, captureStopAfterSilence, stopOnSilence)
 	if err != nil {
 		return "", fmt.Errorf("capturing audio: %w", err)
 	}
@@ -249,7 +263,7 @@ func bytesToFloat32View(b []byte) []float32 {
 	return unsafe.Slice((*float32)(unsafe.Pointer(&b[0])), len(b)/4)
 }
 
-func captureAudioPCM(ctx context.Context, maxDuration, silenceDuration time.Duration) ([]float32, error) {
+func captureAudioPCM(ctx context.Context, maxDuration, silenceDuration time.Duration, stopOnSilence bool) ([]float32, error) {
 	mctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
 		return nil, err
@@ -402,7 +416,7 @@ func captureAudioPCM(ctx context.Context, maxDuration, silenceDuration time.Dura
 			}
 
 			reachedMaxDuration := elapsedSinceStart >= maxDuration
-			reachedSilenceStop := detectedSpeech && !speechActive && elapsedSinceLastSpeech >= silenceDuration
+			reachedSilenceStop := stopOnSilence && detectedSpeech && !speechActive && elapsedSinceLastSpeech >= silenceDuration
 			shouldStop := reachedMaxDuration || reachedSilenceStop
 			mu.Unlock()
 

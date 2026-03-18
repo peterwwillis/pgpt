@@ -21,3 +21,9 @@ func RecordAndTranscribe() (string, error) {
 func RecordAndTranscribeWithProgress(_ func(string)) (string, error) {
 	return "", ErrNotBuiltIn
 }
+
+// RecordAndTranscribeManualWithProgress records audio from the microphone and
+// returns the transcribed text. This stub always returns ErrNotBuiltIn.
+func RecordAndTranscribeManualWithProgress(_ func(string)) (string, error) {
+	return "", ErrNotBuiltIn
+}

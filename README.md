@@ -53,6 +53,9 @@ zop --voice
 
 # Voice input with VAD debug diagnostics
 zop --voice --debug
+
+# Voice input with manual send (disable silence auto-stop)
+zop --voice --voice-manual
 ```
 
 Whisper's native initialization logs are suppressed by default and are shown

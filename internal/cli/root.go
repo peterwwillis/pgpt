@@ -75,6 +75,7 @@ The prompt can be supplied as:
 	root.Flags().BoolP("interactive", "i", false, "interactive chat session")
 	root.Flags().BoolP("stream", "s", false, "stream response to stdout")
 	root.Flags().BoolP("voice", "V", false, "record prompt from microphone (requires whisper-enabled build)")
+	root.Flags().Bool("voice-manual", false, "disable silence auto-stop in voice mode; press Ctrl-D when ready")
 
 	// Subcommands
 	root.AddCommand(newChatCmd(gf))
@@ -129,6 +130,7 @@ func runCompletion(cmd *cobra.Command, args []string, gf *globalFlags) error {
 	}
 
 	voice, _ := cmd.Flags().GetBool("voice")
+	voiceManual, _ := cmd.Flags().GetBool("voice-manual")
 	promptFlag, _ := cmd.Flags().GetString("prompt")
 	interactive, _ := cmd.Flags().GetBool("interactive")
 
@@ -141,6 +143,12 @@ func runCompletion(cmd *cobra.Command, args []string, gf *globalFlags) error {
 	if promptFlag != "" && len(args) > 0 {
 		return fmt.Errorf("cannot combine --prompt with positional prompt arguments")
 	}
+	if voiceManual && !voice {
+		return fmt.Errorf("cannot use --voice-manual without --voice")
+	}
+	if gf.verbose && voice && voiceManual {
+		fmt.Fprintln(errOut, "[zop] voice mode: manual stop (Ctrl-D)")
+	}
 
 	readVoicePrompt := func() (string, error) {
 		var progressFn func(string)
@@ -150,7 +158,15 @@ func runCompletion(cmd *cobra.Command, args []string, gf *globalFlags) error {
 				fmt.Fprintf(errOut, "[zop] %s\n", msg)
 			}
 		}
-		voicePrompt, rerr := whisper.RecordAndTranscribeWithProgress(progressFn)
+		var (
+			voicePrompt string
+			rerr        error
+		)
+		if voiceManual {
+			voicePrompt, rerr = whisper.RecordAndTranscribeManualWithProgress(progressFn)
+		} else {
+			voicePrompt, rerr = whisper.RecordAndTranscribeWithProgress(progressFn)
+		}
 		if rerr != nil {
 			return "", rerr
 		}
