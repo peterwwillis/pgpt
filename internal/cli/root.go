@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -34,6 +36,8 @@ type globalFlags struct {
 	verbose    bool
 	debug      bool
 }
+
+var sessionPartSanitizer = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
 
 func newRootCmd() *cobra.Command {
 	gf := &globalFlags{}
@@ -215,14 +219,56 @@ func runCompletion(cmd *cobra.Command, args []string, gf *globalFlags) error {
 		messages = append(messages, provider.Message{Role: "system", Content: modelCfg.SystemPrompt})
 	}
 
+	// Keep the system-prompt slice so we can reset history when rotating to a
+	// fresh session after hitting provider context limits.
+	baseMessages := append([]provider.Message(nil), messages...)
+
 	// Chat session
 	chatName, _ := cmd.Flags().GetString("chat")
+	autoChat := false
 	var sessionMgr *chat.Manager
-	if chatName != "" {
+	if chatName != "" || interactive {
 		sessionMgr, err = chat.NewManager("")
 		if err != nil {
 			return err
 		}
+	}
+
+	if interactive && chatName == "" {
+		autoChat = true
+		lastAuto, err := sessionMgr.GetLastAutoSession(gf.agent)
+		if err != nil {
+			return err
+		}
+		if lastAuto != "" {
+			exists, err := sessionMgr.Exists(lastAuto)
+			if err != nil {
+				return err
+			}
+			if exists {
+				chatName = lastAuto
+				if gf.verbose {
+					fmt.Fprintf(errOut, "[zop] resumed automatic session %q\n", chatName)
+				}
+			} else if err := sessionMgr.SetLastAutoSession(gf.agent, ""); err != nil {
+				return err
+			}
+		}
+		if chatName == "" {
+			chatName, err = nextUniqueSessionName(sessionMgr, "auto-"+sanitizeSessionNamePart(gf.agent))
+			if err != nil {
+				return err
+			}
+			if err := sessionMgr.SetLastAutoSession(gf.agent, chatName); err != nil {
+				return err
+			}
+			if gf.verbose {
+				fmt.Fprintf(errOut, "[zop] started automatic session %q\n", chatName)
+			}
+		}
+	}
+
+	if chatName != "" && sessionMgr != nil {
 		history, herr := sessionMgr.Get(chatName)
 		if herr != nil {
 			return herr
@@ -246,36 +292,69 @@ func runCompletion(cmd *cobra.Command, args []string, gf *globalFlags) error {
 		fmt.Fprintf(errOut, "[zop] warning: environment variable %s is not set\n", provCfg.APIKeyEnv)
 	}
 
+	rolloverSession := func() error {
+		if sessionMgr == nil {
+			return fmt.Errorf("chat session manager is not initialized")
+		}
+		prefix := sanitizeSessionNamePart(chatName) + "-cont"
+		if autoChat {
+			prefix = "auto-" + sanitizeSessionNamePart(gf.agent)
+		}
+		newName, err := nextUniqueSessionName(sessionMgr, prefix)
+		if err != nil {
+			return err
+		}
+		chatName = newName
+		messages = append([]provider.Message(nil), baseMessages...)
+		if autoChat {
+			if err := sessionMgr.SetLastAutoSession(gf.agent, chatName); err != nil {
+				return err
+			}
+		}
+		fmt.Fprintf(errOut, "[zop] context window reached; continuing in new session %q\n", chatName)
+		return nil
+	}
+
 	sendPrompt := func(prompt string) error {
 		if prompt == "" {
 			return nil
 		}
-		if gf.verbose {
-			fmt.Fprintf(errOut, "[zop] sending text to AI (%d chars)\n", len(prompt))
-		}
-		messages = append(messages, provider.Message{Role: "user", Content: prompt})
-		req := provider.CompletionRequest{
-			Messages:   messages,
-			Model:      modelCfg,
-			Stream:     streamFlag,
-			StreamFunc: streamFn,
-		}
-		resp, rerr := prov.Complete(context.Background(), req)
-		if rerr != nil {
-			return rerr
-		}
-		if !streamFlag {
-			fmt.Fprintln(out, resp.Content)
-		} else {
-			fmt.Fprintln(out)
-		}
-		messages = append(messages, provider.Message{Role: "assistant", Content: resp.Content})
-		if chatName != "" && sessionMgr != nil {
-			if err := sessionMgr.Save(chatName, messages); err != nil {
-				fmt.Fprintf(errOut, "[zop] warning: could not save session: %v\n", err)
+		userMessage := provider.Message{Role: "user", Content: prompt}
+		for attempt := 0; attempt < 2; attempt++ {
+			if gf.verbose {
+				fmt.Fprintf(errOut, "[zop] sending text to AI (%d chars)\n", len(prompt))
 			}
+			reqMessages := append(append([]provider.Message(nil), messages...), userMessage)
+			req := provider.CompletionRequest{
+				Messages:   reqMessages,
+				Model:      modelCfg,
+				Stream:     streamFlag,
+				StreamFunc: streamFn,
+			}
+			resp, rerr := prov.Complete(context.Background(), req)
+			if rerr != nil {
+				if attempt == 0 && interactive && chatName != "" && sessionMgr != nil && isContextOverflowError(rerr) {
+					if err := rolloverSession(); err != nil {
+						return fmt.Errorf("rolling over context-limited session: %w", err)
+					}
+					continue
+				}
+				return rerr
+			}
+			if !streamFlag {
+				fmt.Fprintln(out, resp.Content)
+			} else {
+				fmt.Fprintln(out)
+			}
+			messages = append(reqMessages, provider.Message{Role: "assistant", Content: resp.Content})
+			if chatName != "" && sessionMgr != nil {
+				if err := sessionMgr.Save(chatName, messages); err != nil {
+					fmt.Fprintf(errOut, "[zop] warning: could not save session: %v\n", err)
+				}
+			}
+			return nil
 		}
-		return nil
+		return fmt.Errorf("context rollover retry failed")
 	}
 
 	if initialPrompt != "" {
@@ -319,4 +398,77 @@ func runCompletion(cmd *cobra.Command, args []string, gf *globalFlags) error {
 	}
 
 	return nil
+}
+
+func sanitizeSessionNamePart(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "session"
+	}
+	s = sessionPartSanitizer.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-_")
+	if s == "" {
+		return "session"
+	}
+	return s
+}
+
+func nextUniqueSessionName(mgr *chat.Manager, prefix string) (string, error) {
+	prefix = sanitizeSessionNamePart(prefix)
+	const (
+		timePartLen = len("20060102-150405")
+		randPartLen = 4
+		sepLen      = 2 // prefix-time-rand
+		maxNameLen  = 65
+	)
+	maxPrefix := maxNameLen - timePartLen - randPartLen - sepLen
+	if maxPrefix < 1 {
+		maxPrefix = 1
+	}
+	if len(prefix) > maxPrefix {
+		prefix = prefix[:maxPrefix]
+	}
+
+	for i := 0; i < 16; i++ {
+		now := time.Now().UTC()
+		candidate := fmt.Sprintf("%s-%s-%04x",
+			prefix,
+			now.Format("20060102-150405"),
+			now.UnixNano()&0xffff,
+		)
+		exists, err := mgr.Exists(candidate)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return candidate, nil
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return "", fmt.Errorf("could not allocate unique session name for prefix %q", prefix)
+}
+
+func isContextOverflowError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	needles := []string{
+		"context length",
+		"context window",
+		"maximum context",
+		"prompt is too long",
+		"input is too long",
+		"too many tokens",
+		"token limit",
+		"tokens exceed",
+		"request too large",
+		"max input tokens",
+	}
+	for _, needle := range needles {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
 }

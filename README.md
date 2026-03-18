@@ -45,6 +45,9 @@ zop --chat my-chat "Follow up question"
 # Interactive chat session
 zop --interactive --chat my-chat
 
+# Interactive mode with automatic session resume
+zop --interactive
+
 # Stream the response
 zop --stream "Write a haiku about Go"
 
@@ -60,6 +63,14 @@ zop --voice --voice-manual
 
 Whisper's native initialization logs are suppressed by default and are shown
 when `--debug` is enabled.
+
+In interactive mode, `zop` now manages sessions automatically when `--chat` is
+not provided: it creates a unique auto-session on first run and resumes that
+same auto-session on the next interactive run. User-created sessions (via
+`--chat`) remain separate and are never auto-resumed.
+
+When an interactive conversation exceeds provider context limits, `zop`
+automatically starts a new session and retries the turn.
 
 ## Configuration
 

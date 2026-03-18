@@ -64,6 +64,37 @@ func TestSessionDeleteNonExistent(t *testing.T) {
 	assert.Error(t, m.Delete("ghost"))
 }
 
+func TestAutoSessionStateByAgent(t *testing.T) {
+	dir := t.TempDir()
+	m, err := chat.NewManager(dir)
+	require.NoError(t, err)
+
+	require.NoError(t, m.SetLastAutoSession("default", "auto-default-1"))
+	require.NoError(t, m.SetLastAutoSession("claude", "auto-claude-1"))
+
+	gotDefault, err := m.GetLastAutoSession("default")
+	require.NoError(t, err)
+	assert.Equal(t, "auto-default-1", gotDefault)
+
+	gotClaude, err := m.GetLastAutoSession("claude")
+	require.NoError(t, err)
+	assert.Equal(t, "auto-claude-1", gotClaude)
+
+	// Clear one mapping and ensure it no longer resolves.
+	require.NoError(t, m.SetLastAutoSession("default", ""))
+	gotDefault, err = m.GetLastAutoSession("default")
+	require.NoError(t, err)
+	assert.Equal(t, "", gotDefault)
+}
+
+func TestAutoSessionStateValidatesName(t *testing.T) {
+	dir := t.TempDir()
+	m, err := chat.NewManager(dir)
+	require.NoError(t, err)
+
+	assert.Error(t, m.SetLastAutoSession("default", "bad name with spaces"))
+}
+
 func TestValidateName(t *testing.T) {
 	tests := []struct {
 		name    string
