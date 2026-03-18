@@ -131,6 +131,17 @@ jobs:
             suffix: "-nowhisper"
             whisper: false
             runner: ubuntu-24.04-arm
+          - goos: darwin
+            goarch: arm64
+            cgo: "0"
+            tags: ""
+            suffix: "-nowhisper"
+            whisper: false
+            runner:
+              - self-hosted
+              - macOS
+              - ARM64
+            build_user: docker
           # Windows (no-whisper only for now)
           #- goos: windows
           #  goarch: amd64
@@ -158,7 +169,14 @@ jobs:
           cache: true
 
       - name: Download dependencies
-        run: go mod download
+        env:
+          BUILD_USER: ${{ matrix.build_user }}
+        run: |
+          if [ -n "$BUILD_USER" ]; then
+            sudo -H -u "$BUILD_USER" go mod download
+          else
+            go mod download
+          fi
 
       - name: Set binary name
         id: binary
@@ -195,17 +213,25 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
           CGO_ENABLED: ${{ matrix.cgo }}
+          BUILD_USER: ${{ matrix.build_user }}
         run: |
           TAGS="${{ matrix.tags }}"
-          TAG_ARGS=()
-          if [ -n "$TAGS" ]; then
-            TAG_ARGS=(-tags "$TAGS")
-          fi
-          go build \
-            "${TAG_ARGS[@]}" \
-            -ldflags="-s -w -X github.com/peterwwillis/zop/internal/cli.Version=${{ needs.resolve-tag.outputs.tag }}" \
-            -o "${{ steps.binary.outputs.name }}" \
+          BUILD_ARGS=(
+            -ldflags="-s -w -X github.com/peterwwillis/zop/internal/cli.Version=${{ needs.resolve-tag.outputs.tag }}"
+            -o "${{ steps.binary.outputs.name }}"
             ./cmd/zop
+          )
+          if [ -n "$TAGS" ]; then
+            BUILD_ARGS=(-tags "$TAGS" "${BUILD_ARGS[@]}")
+          fi
+          if [ -n "$BUILD_USER" ]; then
+            sudo -H -u "$BUILD_USER" env GOOS="$GOOS" GOARCH="$GOARCH" GOARM="$GOARM" CGO_ENABLED="$CGO_ENABLED" \
+              go build \
+              "${BUILD_ARGS[@]}"
+          else
+            go build \
+              "${BUILD_ARGS[@]}"
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
