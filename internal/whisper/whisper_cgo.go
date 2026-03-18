@@ -103,11 +103,14 @@ func ensureModel(path string) error {
 }
 
 const (
-	captureSampleRate          = 16000
-	captureChannels            = 1
-	captureMaxDuration         = 30 * time.Second
-	captureSilenceStopDuration = 1200 * time.Millisecond
-	captureSpeechThreshold     = 700
+	captureSampleRate       = 16000
+	captureChannels         = 1
+	captureMaxDuration      = 30 * time.Second
+	captureStopAfterSilence = 1200 * time.Millisecond
+	// captureSpeechThreshold is an absolute int16 amplitude threshold. Values
+	// below this are treated as background noise; values at/above it count as
+	// speech activity for silence-stop detection.
+	captureSpeechThreshold = 700
 )
 
 // RecordAndTranscribe records audio from the default microphone and transcribes
@@ -134,7 +137,7 @@ func RecordAndTranscribe() (string, error) {
 	defer stop()
 
 	fmt.Fprintln(os.Stderr, "Recording… press Ctrl-C or wait for silence.")
-	pcm, err := captureAudioPCM(recordCtx, captureMaxDuration, captureSilenceStopDuration)
+	pcm, err := captureAudioPCM(recordCtx, captureMaxDuration, captureStopAfterSilence)
 	if err != nil {
 		return "", fmt.Errorf("capturing audio: %w", err)
 	}
@@ -219,7 +222,9 @@ func captureAudioPCM(ctx context.Context, maxDuration, silenceDuration time.Dura
 				detectedSpeech = true
 				lastSpeechAt = now
 			}
-			shouldStop := now.Sub(startedAt) >= maxDuration || (detectedSpeech && now.Sub(lastSpeechAt) >= silenceDuration)
+			reachedMaxDuration := now.Sub(startedAt) >= maxDuration
+			reachedSilenceStop := detectedSpeech && now.Sub(lastSpeechAt) >= silenceDuration
+			shouldStop := reachedMaxDuration || reachedSilenceStop
 			mu.Unlock()
 
 			if shouldStop {
@@ -244,9 +249,7 @@ func captureAudioPCM(ctx context.Context, maxDuration, silenceDuration time.Dura
 	}
 
 	if device.IsStarted() {
-		if err := device.Stop(); err != nil {
-			return nil, err
-		}
+		_ = device.Stop()
 	}
 
 	mu.Lock()
