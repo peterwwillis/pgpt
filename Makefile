@@ -14,7 +14,7 @@ else
   _HOST_OS   := $(shell uname -s | tr '[:upper:]' '[:lower:]' | \
                   sed 's/mingw.*/windows/;s/cygwin.*/windows/;s/msys.*/windows/')
   _HOST_ARCH := $(shell uname -m | \
-                  sed 's/x86_64/amd64/;s/aarch64/arm64/;s/armv6l/armv6l/;s/armv7l/armv7l/')
+                  sed 's/x86_64/amd64/;s/aarch64/arm64/')
   _HOME      := $(HOME)
 endif
 
@@ -78,7 +78,7 @@ _binary_name = zop-$(GOOS)-$(GOARCH)$(if $(GOARM),v$(GOARM),)$(BINARY_SUFFIX)$(i
 BINARY ?= $(_binary_name)
 
 # -tags flag, empty when BUILD_TAGS is unset
-_tag_args = $(if $(BUILD_TAGS),-tags $(BUILD_TAGS),)
+_tag_args = $(if $(BUILD_TAGS),-tags "$(BUILD_TAGS)",)
 
 # Prerequisite that pulls in whisper-fetch whenever the whisper tag is active.
 # Evaluates to empty when BUILD_TAGS does not contain 'whisper', so overriding
