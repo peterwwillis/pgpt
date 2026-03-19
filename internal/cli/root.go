@@ -16,7 +16,9 @@ import (
 
 	"github.com/peterwwillis/zop/internal/chat"
 	"github.com/peterwwillis/zop/internal/config"
+	"github.com/peterwwillis/zop/internal/mcp"
 	"github.com/peterwwillis/zop/internal/provider"
+	"github.com/peterwwillis/zop/internal/tool"
 	"github.com/peterwwillis/zop/internal/whisper"
 )
 
@@ -114,6 +116,29 @@ func runCompletion(cmd *cobra.Command, args []string, gf *globalFlags) error {
 	prov, err := provider.New(gf.agent, cfg)
 	if err != nil {
 		return err
+	}
+
+	// Initialize tools/MCP
+	registry := tool.NewRegistry()
+	registry.Register(&tool.RunCommandTool{})
+	for name, mcpCfg := range cfg.MCPServers {
+		mcpClient, err := mcp.NewClient(context.Background(), mcpCfg.Command, mcpCfg.Args...)
+		if err != nil {
+			if gf.verbose {
+				fmt.Fprintf(cmd.ErrOrStderr(), "[zop] warning: failed to connect to MCP server %q: %v\n", name, err)
+			}
+			continue
+		}
+		wrappers, err := mcp.WrapTools(context.Background(), mcpClient)
+		if err != nil {
+			if gf.verbose {
+				fmt.Fprintf(cmd.ErrOrStderr(), "[zop] warning: failed to list tools for MCP server %q: %v\n", name, err)
+			}
+			continue
+		}
+		for _, w := range wrappers {
+			registry.Register(w)
+		}
 	}
 
 	out := cmd.OutOrStdout()
@@ -325,29 +350,76 @@ func runCompletion(cmd *cobra.Command, args []string, gf *globalFlags) error {
 			if gf.verbose {
 				fmt.Fprintf(errOut, "[zop] sending text to AI (%d chars)\n", len(prompt))
 			}
-			reqMessages := append(append([]provider.Message(nil), messages...), userMessage)
-			req := provider.CompletionRequest{
-				Messages:   reqMessages,
-				Model:      modelCfg,
-				Stream:     streamFlag,
-				StreamFunc: streamFn,
-			}
-			resp, rerr := prov.Complete(context.Background(), req)
-			if rerr != nil {
-				if attempt == 0 && interactive && chatName != "" && sessionMgr != nil && isContextOverflowError(rerr) {
-					if err := rolloverSession(); err != nil {
-						return fmt.Errorf("rolling over context-limited session: %w", err)
-					}
-					continue
+			currentMessages := append(append([]provider.Message(nil), messages...), userMessage)
+			for {
+				req := provider.CompletionRequest{
+					Messages:   currentMessages,
+					Model:      modelCfg,
+					Stream:     streamFlag,
+					StreamFunc: streamFn,
+					Tools:      registry.List(),
 				}
-				return rerr
+				resp, rerr := prov.Complete(context.Background(), req)
+				if rerr != nil {
+					if attempt == 0 && interactive && chatName != "" && sessionMgr != nil && isContextOverflowError(rerr) {
+						if err := rolloverSession(); err != nil {
+							return fmt.Errorf("rolling over context-limited session: %w", err)
+						}
+						continue
+					}
+					return rerr
+				}
+
+				if !streamFlag {
+					fmt.Fprintln(out, resp.Content)
+				} else {
+					fmt.Fprintln(out)
+				}
+
+				currentMessages = append(currentMessages, provider.Message{
+					Role:      "assistant",
+					Content:   resp.Content,
+					ToolCalls: resp.ToolCalls,
+				})
+
+				if len(resp.ToolCalls) == 0 {
+					break
+				}
+
+				// Execute tool calls
+				for _, tc := range resp.ToolCalls {
+					if gf.verbose {
+						fmt.Fprintf(errOut, "[zop] tool call: %s(%s)\n", tc.Name, tc.Arguments)
+					}
+					t, ok := registry.Get(tc.Name)
+					var toolResult string
+					if !ok {
+						toolResult = fmt.Sprintf("Error: tool %q not found", tc.Name)
+					} else {
+						// For run_command, we might want to ask confirmation if not in a special mode,
+						// but the user asked for CLI tool calling support.
+						res, err := t.Execute(context.Background(), tc.Arguments)
+						if err != nil {
+							toolResult = fmt.Sprintf("Error: %v", err)
+						} else {
+							toolResult = res
+						}
+					}
+					currentMessages = append(currentMessages, provider.Message{
+						Role:    "tool",
+						ToolID:  tc.ID,
+						Content: toolResult,
+					})
+					if gf.verbose {
+						fmt.Fprintf(errOut, "[zop] tool result: %d chars\n", len(toolResult))
+					}
+				}
+				if streamFlag {
+					fmt.Fprintln(out, "[tool calling...]")
+				}
 			}
-			if !streamFlag {
-				fmt.Fprintln(out, resp.Content)
-			} else {
-				fmt.Fprintln(out)
-			}
-			messages = append(reqMessages, provider.Message{Role: "assistant", Content: resp.Content})
+
+			messages = currentMessages
 			if chatName != "" && sessionMgr != nil {
 				if err := sessionMgr.Save(chatName, messages); err != nil {
 					fmt.Fprintf(errOut, "[zop] warning: could not save session: %v\n", err)

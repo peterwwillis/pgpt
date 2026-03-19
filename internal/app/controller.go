@@ -11,7 +11,9 @@ import (
 
 	"github.com/peterwwillis/zop/internal/chat"
 	"github.com/peterwwillis/zop/internal/config"
+	"github.com/peterwwillis/zop/internal/mcp"
 	"github.com/peterwwillis/zop/internal/provider"
+	"github.com/peterwwillis/zop/internal/tool"
 )
 
 const (
@@ -32,6 +34,7 @@ type Controller struct {
 	messages       []provider.Message
 	sessionMgr     *chat.Manager
 	sessionBase    string
+	toolRegistry   *tool.Registry
 }
 
 // NewController loads configuration and prepares a provider instance.
@@ -55,11 +58,15 @@ func NewController(configPath, sessionName, agentName string) (*Controller, erro
 		agentName = defaultAgentName(cfg)
 	}
 	ctrl := &Controller{
-		cfg:         cfg,
-		configPath:  configPath,
-		agentName:   agentName,
-		sessionBase: sessionName,
+		cfg:          cfg,
+		configPath:   configPath,
+		agentName:    agentName,
+		sessionBase:  sessionName,
+		toolRegistry: tool.NewRegistry(),
 	}
+
+	// Register built-in tools
+	ctrl.toolRegistry.Register(&tool.RunCommandTool{})
 
 	sessionMgr, err := chat.NewManager("")
 	if err != nil {
@@ -160,6 +167,7 @@ func (c *Controller) ClearSession() error {
 }
 
 // SendPrompt sends a prompt to the provider and persists chat history.
+// It handles tool calling loops.
 func (c *Controller) SendPrompt(ctx context.Context, prompt string, streamFunc func(string)) (string, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
@@ -172,20 +180,61 @@ func (c *Controller) SendPrompt(ctx context.Context, prompt string, streamFunc f
 	prov := c.prov
 	sessionMgr := c.sessionMgr
 	sessionName := c.sessionNameLocked()
+	registry := c.toolRegistry
 	c.mu.Unlock()
 
 	messages = append(messages, provider.Message{Role: "user", Content: prompt})
-	req := provider.CompletionRequest{
-		Messages:   messages,
-		Model:      modelCfg,
-		Stream:     streamFunc != nil,
-		StreamFunc: streamFunc,
+
+	var lastContent string
+	for {
+		req := provider.CompletionRequest{
+			Messages:   messages,
+			Model:      modelCfg,
+			Stream:     streamFunc != nil,
+			StreamFunc: streamFunc,
+			Tools:      registry.List(),
+		}
+		resp, err := prov.Complete(ctx, req)
+		if err != nil {
+			return "", err
+		}
+
+		messages = append(messages, provider.Message{
+			Role:      "assistant",
+			Content:   resp.Content,
+			ToolCalls: resp.ToolCalls,
+		})
+		lastContent = resp.Content
+
+		if len(resp.ToolCalls) == 0 {
+			break
+		}
+
+		// Execute tool calls
+		for _, tc := range resp.ToolCalls {
+			t, ok := registry.Get(tc.Name)
+			var toolResult string
+			if !ok {
+				toolResult = fmt.Sprintf("Error: tool %q not found", tc.Name)
+			} else {
+				res, err := t.Execute(ctx, tc.Arguments)
+				if err != nil {
+					toolResult = fmt.Sprintf("Error: %v", err)
+				} else {
+					toolResult = res
+				}
+			}
+			messages = append(messages, provider.Message{
+				Role:    "tool",
+				ToolID:  tc.ID,
+				Content: toolResult,
+			})
+		}
+		// Stream a separator if we are streaming
+		if streamFunc != nil {
+			streamFunc("\n[tool calling...]\n")
+		}
 	}
-	resp, err := prov.Complete(ctx, req)
-	if err != nil {
-		return "", err
-	}
-	messages = append(messages, provider.Message{Role: "assistant", Content: resp.Content})
 
 	c.mu.Lock()
 	c.messages = messages
@@ -193,10 +242,10 @@ func (c *Controller) SendPrompt(ctx context.Context, prompt string, streamFunc f
 
 	if sessionMgr != nil && sessionName != "" {
 		if err := sessionMgr.Save(sessionName, messages); err != nil {
-			return resp.Content, err
+			return lastContent, err
 		}
 	}
-	return resp.Content, nil
+	return lastContent, nil
 }
 
 func (c *Controller) reloadProviderLocked() error {
@@ -225,6 +274,25 @@ func (c *Controller) reloadProviderLocked() error {
 		c.systemPrompt = agent.SystemPrompt
 	} else if modelCfg.SystemPrompt != "" {
 		c.systemPrompt = modelCfg.SystemPrompt
+	}
+
+	// Reload tools/MCP
+	c.toolRegistry = tool.NewRegistry()
+	c.toolRegistry.Register(&tool.RunCommandTool{})
+	for name, mcpCfg := range c.cfg.MCPServers {
+		mcpClient, err := mcp.NewClient(context.Background(), mcpCfg.Command, mcpCfg.Args...)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to connect to MCP server %q: %v\n", name, err)
+			continue
+		}
+		wrappers, err := mcp.WrapTools(context.Background(), mcpClient)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to list tools for MCP server %q: %v\n", name, err)
+			continue
+		}
+		for _, w := range wrappers {
+			c.toolRegistry.Register(w)
+		}
 	}
 
 	return c.loadHistoryLocked()

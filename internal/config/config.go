@@ -154,9 +154,16 @@ type ModelConfig struct {
 
 // Config is the top-level configuration structure.
 type Config struct {
-	Agents    map[string]AgentConfig    `toml:"agents"`
-	Providers map[string]ProviderConfig `toml:"providers"`
-	Models    map[string]ModelConfig    `toml:"models"`
+	Agents     map[string]AgentConfig    `toml:"agents"`
+	Providers  map[string]ProviderConfig `toml:"providers"`
+	Models     map[string]ModelConfig    `toml:"models"`
+	MCPServers map[string]MCPServerConfig `toml:"mcp_servers"`
+}
+
+// MCPServerConfig defines an MCP server connection.
+type MCPServerConfig struct {
+	Command string   `toml:"command"`
+	Args    []string `toml:"args"`
 }
 
 // RawConfig is the untyped config structure used for editing config files.
