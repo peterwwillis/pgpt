@@ -38,6 +38,14 @@ model    = "openrouter-default"
 provider = "ollama"
 model    = "llama3"
 
+[agents.copilot]
+provider = "copilot-cli"
+model    = "gpt-4o"
+
+[agents.gemini-cli]
+provider = "gemini-cli"
+model    = "gemini-2.0-flash"
+
 # ─────────────────────────────────────────────
 # Providers
 # ─────────────────────────────────────────────
@@ -62,6 +70,19 @@ base_url    = "https://openrouter.ai/api/v1"
 # No API key required for local Ollama
 base_url = "http://localhost:11434/v1"
 
+[providers.copilot-cli]
+command     = "copilot"
+args        = ["-s"]
+prompt_flag = "-p"
+model_flag  = "--model"
+
+[providers.gemini-cli]
+command     = "gemini"
+args        = ["-o", "text"]
+prompt_flag = "-p"
+model_flag  = "-m"
+use_stdin   = true
+
 # ─────────────────────────────────────────────
 # Models
 # ─────────────────────────────────────────────
@@ -72,6 +93,12 @@ max_tokens  = 4096
 temperature = 1.0
 top_p       = 1.0
 # system_prompt = "You are a helpful assistant."
+
+[models.gemini-2.0-flash]
+model_id    = "gemini-2.0-flash"
+max_tokens  = 8192
+temperature = 1.0
+top_p       = 1.0
 
 [models.gpt4o-mini]
 model_id    = "gpt-4o-mini"
@@ -135,6 +162,13 @@ type ProviderConfig struct {
 	APIKeyEnv string `toml:"api_key_env"`
 	// BaseURL overrides the provider's default API endpoint.
 	BaseURL string `toml:"base_url"`
+
+	// CLI-specific settings
+	Command    string   `toml:"command"`
+	Args       []string `toml:"args"`
+	PromptFlag string   `toml:"prompt_flag"`
+	ModelFlag  string   `toml:"model_flag"`
+	UseStdin   bool     `toml:"use_stdin"`
 }
 
 // ModelConfig describes a model and its generation hyperparameters.

@@ -53,6 +53,8 @@ func New(agentName string, cfg *config.Config) (Provider, error) {
 		return newAnthropic(provCfg)
 	case "google":
 		return newGoogle(provCfg)
+	case "copilot-cli", "gemini-cli":
+		return newExecProvider(agent.Provider, provCfg), nil
 	default:
 		return nil, fmt.Errorf("unknown provider %q", agent.Provider)
 	}
