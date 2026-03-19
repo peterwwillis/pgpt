@@ -18,12 +18,24 @@ package whisper
 // #cgo linux LDFLAGS: -fopenmp
 // #include <stdlib.h>
 // #include "whisper.h"
+// static void whisper_log_callback_silent(enum ggml_log_level level, const char * text, void * user_data) {
+//   (void) level;
+//   (void) text;
+//   (void) user_data;
+// }
+// static void whisper_log_set_silent(void) {
+//   whisper_log_set(whisper_log_callback_silent, NULL);
+// }
+// static void whisper_log_set_default(void) {
+//   whisper_log_set(NULL, NULL);
+// }
 import "C"
 
 import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -102,26 +114,68 @@ func ensureModel(path string) error {
 	return nil
 }
 
+// configureWhisperNativeLogging controls whisper.cpp's native stderr logging.
+// By default we silence it to keep CLI output clean. When ZOP_DEBUG_VAD=1 is
+// set (e.g. via `zop --debug`), we restore whisper's default logger.
+func configureWhisperNativeLogging() {
+	if os.Getenv("ZOP_DEBUG_VAD") == "1" {
+		C.whisper_log_set_default()
+		return
+	}
+	C.whisper_log_set_silent()
+}
+
 const (
 	captureSampleRate       = 16000
 	captureChannels         = 1
 	captureMaxDuration      = 30 * time.Second
 	captureStopAfterSilence = 1200 * time.Millisecond
-	// captureSpeechThreshold is an absolute int16 amplitude threshold. Values
-	// below this are treated as background noise; values at/above it count as
-	// speech activity for silence-stop detection.
-	captureSpeechThreshold = 700
+
+	// Adaptive VAD constants.
+	//
+	// We compute frame RMS with DC-offset removed and compare it to a running
+	// ambient-noise RMS estimate using SNR (in dB). This makes detection portable
+	// across microphones with very different gain levels.
+	captureNoiseEWMAAlpha = 0.08
+	captureNoiseWarmup    = 400 * time.Millisecond
+
+	captureSpeechStartDB     = 5.0
+	captureSpeechStopDB      = 2.0
+	captureSpeechStartMin    = 120 * time.Millisecond
+	captureSpeechEndHangover = 220 * time.Millisecond
+
+	// Floors to avoid divide-by-zero/near-zero instability.
+	captureNoiseFloorRMS = 1.0
+	captureMinVoiceRMS   = 120.0
 )
 
 // RecordAndTranscribe records audio from the default microphone and transcribes
 // it using the local Whisper model. If the model file does not exist it is
 // downloaded first.
 func RecordAndTranscribe() (string, error) {
+	return recordAndTranscribe(nil, true)
+}
+
+// RecordAndTranscribeWithProgress records audio and transcribes it with Whisper.
+// If progress is non-nil, it receives lifecycle messages suitable for verbose
+// stderr logging by callers.
+func RecordAndTranscribeWithProgress(progress func(string)) (string, error) {
+	return recordAndTranscribe(progress, true)
+}
+
+// RecordAndTranscribeManualWithProgress records audio and transcribes it with
+// Whisper, but disables silence auto-stop. Recording ends when Ctrl-D is sent.
+func RecordAndTranscribeManualWithProgress(progress func(string)) (string, error) {
+	return recordAndTranscribe(progress, false)
+}
+
+func recordAndTranscribe(progress func(string), stopOnSilence bool) (string, error) {
 	modelPath := defaultModelPath()
 
 	if err := ensureModel(modelPath); err != nil {
 		return "", fmt.Errorf("whisper model setup: %w", err)
 	}
+	configureWhisperNativeLogging()
 
 	cModel := C.CString(modelPath)
 	defer C.free(unsafe.Pointer(cModel))
@@ -133,16 +187,38 @@ func RecordAndTranscribe() (string, error) {
 	}
 	defer C.whisper_free(ctx)
 
-	recordCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	recordCtx, stopRecording := context.WithCancel(context.Background())
+	defer stopRecording()
 
-	fmt.Fprintln(os.Stderr, "Recording… press Ctrl-C or wait for silence.")
-	pcm, err := captureAudioPCM(recordCtx, captureMaxDuration, captureStopAfterSilence)
+	// Handle SIGTERM so the OS can cleanly stop a recording in progress.
+	sigCtx, sigStop := signal.NotifyContext(recordCtx, syscall.SIGTERM)
+	defer sigStop()
+
+	// Watch for Ctrl+D (EOF on stdin) to stop recording without exiting.
+	go func() {
+		b := make([]byte, 1)
+		for {
+			if _, err := os.Stdin.Read(b); err != nil {
+				stopRecording()
+				return
+			}
+		}
+	}()
+
+	if stopOnSilence {
+		fmt.Fprintln(os.Stderr, "Recording… calibrating noise floor briefly, then speak (Ctrl-D to stop).")
+	} else {
+		fmt.Fprintln(os.Stderr, "Recording… silence auto-stop disabled; press Ctrl-D when ready.")
+	}
+	pcm, err := captureAudioPCM(sigCtx, captureMaxDuration, captureStopAfterSilence, stopOnSilence)
 	if err != nil {
 		return "", fmt.Errorf("capturing audio: %w", err)
 	}
 	if len(pcm) == 0 {
 		return "", fmt.Errorf("no audio captured")
+	}
+	if progress != nil {
+		progress("recording stopped; Whisper transcription started")
 	}
 
 	wparams := C.whisper_full_default_params(C.WHISPER_SAMPLING_GREEDY)
@@ -177,17 +253,17 @@ func RecordAndTranscribe() (string, error) {
 	return text, nil
 }
 
-// bytesToInt16View creates a zero-allocation int16 view over a byte slice.
+// bytesToFloat32View creates a zero-allocation float32 view over a byte slice.
 // The returned slice is only valid as long as the underlying byte slice is valid.
 // It is safe to use within the callback as we copy the data out before returning.
-func bytesToInt16View(b []byte) []int16 {
+func bytesToFloat32View(b []byte) []float32 {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*int16)(unsafe.Pointer(&b[0])), len(b)/2)
+	return unsafe.Slice((*float32)(unsafe.Pointer(&b[0])), len(b)/4)
 }
 
-func captureAudioPCM(ctx context.Context, maxDuration, silenceDuration time.Duration) ([]float32, error) {
+func captureAudioPCM(ctx context.Context, maxDuration, silenceDuration time.Duration, stopOnSilence bool) ([]float32, error) {
 	mctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
 		return nil, err
@@ -198,19 +274,39 @@ func captureAudioPCM(ctx context.Context, maxDuration, silenceDuration time.Dura
 	}()
 
 	cfg := malgo.DefaultDeviceConfig(malgo.Capture)
-	cfg.Capture.Format = malgo.FormatS16
+	cfg.Capture.Format = malgo.FormatF32
 	cfg.Capture.Channels = captureChannels
 	cfg.SampleRate = captureSampleRate
 
+	durationToSamples := func(d time.Duration) int64 {
+		s := int64(captureSampleRate) * int64(d) / int64(time.Second)
+		if s < 1 {
+			return 1
+		}
+		return s
+	}
+	vadDebug := os.Getenv("ZOP_DEBUG_VAD") == "1"
+
 	var (
-		mu              sync.Mutex
-		samples         []int16
-		detectedSpeech  bool
-		totalSamples    int64 // total samples captured across all channels
+		mu               sync.Mutex
+		samples          []float32
+		detectedSpeech   bool
+		speechActive     bool
+		totalSamples     int64
 		lastSpeechSample int64
-		stopOnce        sync.Once
-		done            = make(chan struct{})
+		speechAboveStart int64
+		speechBelowStop  int64
+		stopOnce         sync.Once
+		done             = make(chan struct{})
+
+		noiseRMS         float64
+		noiseInitialized bool
+		lastDebugSample  int64
 	)
+	speechStartSamples := durationToSamples(captureSpeechStartMin)
+	speechEndSamples := durationToSamples(captureSpeechEndHangover)
+	noiseWarmupSamples := durationToSamples(captureNoiseWarmup)
+	debugEverySamples := durationToSamples(250 * time.Millisecond)
 
 	stopCapture := func() {
 		stopOnce.Do(func() {
@@ -220,7 +316,7 @@ func captureAudioPCM(ctx context.Context, maxDuration, silenceDuration time.Dura
 
 	deviceCallbacks := malgo.DeviceCallbacks{
 		Data: func(_, input []byte, _ uint32) {
-			frameSamples := bytesToInt16View(input)
+			frameSamples := bytesToFloat32View(input)
 			if len(frameSamples) == 0 {
 				return
 			}
@@ -228,23 +324,68 @@ func captureAudioPCM(ctx context.Context, maxDuration, silenceDuration time.Dura
 			mu.Lock()
 			samples = append(samples, frameSamples...)
 
-			// Number of frames in this callback (per channel).
 			frameCount := int64(len(frameSamples)) / int64(captureChannels)
 			if frameCount <= 0 {
 				mu.Unlock()
 				return
 			}
-
-			// Update sample counters.
-			totalSamplesBefore := totalSamples
 			totalSamples += frameCount
 
-			if hasSpeech(frameSamples, captureSpeechThreshold) {
-				detectedSpeech = true
-				lastSpeechSample = totalSamples
+			// Keep VAD RMS values in int16-equivalent units for readable logs.
+			// We remove DC offset first so microphones with constant bias don't look
+			// like continuous speech.
+			frameRMS := rmsAmplitudeFloat32(frameSamples) * 32768.0
+
+			if !noiseInitialized {
+				noiseRMS = math.Max(frameRMS, captureNoiseFloorRMS)
+				noiseInitialized = true
+			}
+			noiseRMS = math.Max(noiseRMS, captureNoiseFloorRMS)
+
+			inWarmup := totalSamples <= noiseWarmupSamples
+
+			if inWarmup {
+				// During warmup, only estimate ambient noise and suppress speech state.
+				noiseRMS += captureNoiseEWMAAlpha * (frameRMS - noiseRMS)
+				noiseRMS = math.Max(noiseRMS, captureNoiseFloorRMS)
+				speechAboveStart = 0
+				speechBelowStop = 0
+				speechActive = false
 			}
 
-			// Convert sample counts to durations using the known sample rate.
+			snrDB := 20.0 * math.Log10((frameRMS+captureNoiseFloorRMS)/(noiseRMS+captureNoiseFloorRMS))
+
+			if !inWarmup {
+				if !speechActive {
+					if frameRMS >= captureMinVoiceRMS && snrDB >= captureSpeechStartDB {
+						speechAboveStart += frameCount
+						if speechAboveStart >= speechStartSamples {
+							speechActive = true
+							detectedSpeech = true
+							lastSpeechSample = totalSamples
+							speechAboveStart = 0
+							speechBelowStop = 0
+						}
+					} else {
+						speechAboveStart = 0
+						// Update ambient noise estimate only while not in speech.
+						noiseRMS += captureNoiseEWMAAlpha * (frameRMS - noiseRMS)
+						noiseRMS = math.Max(noiseRMS, captureNoiseFloorRMS)
+					}
+				} else {
+					if frameRMS >= captureMinVoiceRMS && snrDB >= captureSpeechStopDB {
+						speechBelowStop = 0
+						lastSpeechSample = totalSamples
+					} else {
+						speechBelowStop += frameCount
+						if speechBelowStop >= speechEndSamples {
+							speechActive = false
+							speechBelowStop = 0
+						}
+					}
+				}
+			}
+
 			sampleRate := int64(captureSampleRate)
 			elapsedSinceStart := time.Duration(totalSamples) * time.Second / time.Duration(sampleRate)
 
@@ -252,15 +393,30 @@ func captureAudioPCM(ctx context.Context, maxDuration, silenceDuration time.Dura
 			if detectedSpeech {
 				silenceSamples := totalSamples - lastSpeechSample
 				if silenceSamples < 0 {
-					// Should not happen, but guard against negative durations.
 					silenceSamples = 0
 				}
 				elapsedSinceLastSpeech = time.Duration(silenceSamples) * time.Second / time.Duration(sampleRate)
 			}
 
+			if vadDebug && totalSamples-lastDebugSample >= debugEverySamples {
+				fmt.Fprintf(
+					os.Stderr,
+					"[zop] vad rms=%.1f noise=%.1f snr_db=%.2f start_db=%.2f stop_db=%.2f warmup=%t active=%t detected=%t silence_ms=%d\n",
+					frameRMS,
+					noiseRMS,
+					snrDB,
+					captureSpeechStartDB,
+					captureSpeechStopDB,
+					inWarmup,
+					speechActive,
+					detectedSpeech,
+					elapsedSinceLastSpeech/time.Millisecond,
+				)
+				lastDebugSample = totalSamples
+			}
+
 			reachedMaxDuration := elapsedSinceStart >= maxDuration
-			reachedSilenceStop := detectedSpeech && elapsedSinceLastSpeech >= silenceDuration
-			_ = totalSamplesBefore // kept to preserve potential future use without changing semantics
+			reachedSilenceStop := stopOnSilence && detectedSpeech && !speechActive && elapsedSinceLastSpeech >= silenceDuration
 			shouldStop := reachedMaxDuration || reachedSilenceStop
 			mu.Unlock()
 
@@ -295,15 +451,13 @@ func captureAudioPCM(ctx context.Context, maxDuration, silenceDuration time.Dura
 		_ = device.Stop()
 	}
 
-	// If we exited due to context cancellation or timeout, surface that error
-	// to the caller instead of returning (possibly empty) audio with a nil error.
-	if err := waitCtx.Err(); err != nil {
-		return nil, err
-	}
+	// Return whatever was recorded regardless of why we stopped (silence
+	// detection, max-duration timeout, or Ctrl-C / SIGTERM). The caller
+	// checks for empty audio and surfaces a clear error in that case.
 
 	mu.Lock()
-	recorded := append([]int16(nil), samples...)
+	recorded := append([]float32(nil), samples...)
 	mu.Unlock()
 
-	return int16ToPCMFloat(recorded), nil
+	return recorded, nil
 }

@@ -23,6 +23,24 @@ func TestHasSpeech(t *testing.T) {
 	require.True(t, hasSpeech([]int16{-32768}, 700))
 }
 
+func TestRMSAmplitude(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 0.0, rmsAmplitude(nil))
+	require.Equal(t, 0.0, rmsAmplitude([]int16{0, 0, 0}))
+	require.InDelta(t, 100.0, rmsAmplitude([]int16{100, -100, 100, -100}), 1e-9)
+}
+
+func TestRMSAmplitudeFloat32(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 0.0, rmsAmplitudeFloat32(nil))
+	require.Equal(t, 0.0, rmsAmplitudeFloat32([]float32{0, 0, 0}))
+	require.InDelta(t, 0.5, rmsAmplitudeFloat32([]float32{0.5, -0.5, 0.5, -0.5}), 1e-7)
+	require.InDelta(t, 0.0, rmsAmplitudeFloat32([]float32{0.5, 0.5, 0.5, 0.5}), 1e-9)
+	require.InDelta(t, 0.5, rmsAmplitudeFloat32([]float32{0.6, -0.4, 0.6, -0.4}), 1e-7)
+}
+
 func TestInt16ToPCMFloat(t *testing.T) {
 	t.Parallel()
 

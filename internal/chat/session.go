@@ -16,6 +16,12 @@ import (
 // validNameRegex is the regexp that session names must satisfy.
 var validNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,65}$`)
 
+const autoSessionStateFile = ".auto_sessions_state"
+
+type autoSessionState struct {
+	LastByAgent map[string]string `json:"last_by_agent"`
+}
+
 // Manager persists and retrieves chat sessions on the local filesystem.
 type Manager struct {
 	dir string
@@ -42,6 +48,10 @@ func (m *Manager) sessionPath(name string) string {
 	return filepath.Join(m.dir, name+".json")
 }
 
+func (m *Manager) autoStatePath() string {
+	return filepath.Join(m.dir, autoSessionStateFile)
+}
+
 // ValidateName checks that name conforms to naming rules.
 func ValidateName(name string) error {
 	if !validNameRegex.MatchString(name) {
@@ -63,6 +73,73 @@ func (m *Manager) Exists(name string) (bool, error) {
 		return false, nil
 	}
 	return false, err
+}
+
+func (m *Manager) loadAutoState() (autoSessionState, error) {
+	data, err := os.ReadFile(m.autoStatePath())
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return autoSessionState{LastByAgent: map[string]string{}}, nil
+		}
+		return autoSessionState{}, fmt.Errorf("reading auto session state: %w", err)
+	}
+
+	var state autoSessionState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return autoSessionState{}, fmt.Errorf("parsing auto session state: %w", err)
+	}
+	if state.LastByAgent == nil {
+		state.LastByAgent = map[string]string{}
+	}
+	return state, nil
+}
+
+func (m *Manager) saveAutoState(state autoSessionState) error {
+	if state.LastByAgent == nil {
+		state.LastByAgent = map[string]string{}
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return fmt.Errorf("encoding auto session state: %w", err)
+	}
+	return os.WriteFile(m.autoStatePath(), data, 0600)
+}
+
+// GetLastAutoSession returns the last auto-managed interactive session name for
+// the provided agent.
+func (m *Manager) GetLastAutoSession(agent string) (string, error) {
+	if agent == "" {
+		agent = "default"
+	}
+	state, err := m.loadAutoState()
+	if err != nil {
+		return "", err
+	}
+	return state.LastByAgent[agent], nil
+}
+
+// SetLastAutoSession stores the last auto-managed interactive session name for
+// the provided agent. Passing an empty name clears the mapping.
+func (m *Manager) SetLastAutoSession(agent, name string) error {
+	if agent == "" {
+		agent = "default"
+	}
+	if name != "" {
+		if err := ValidateName(name); err != nil {
+			return err
+		}
+	}
+
+	state, err := m.loadAutoState()
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		delete(state.LastByAgent, agent)
+	} else {
+		state.LastByAgent[agent] = name
+	}
+	return m.saveAutoState(state)
 }
 
 // Get loads the message history for a session.
