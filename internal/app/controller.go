@@ -12,6 +12,7 @@ import (
 	"github.com/peterwwillis/zop/internal/chat"
 	"github.com/peterwwillis/zop/internal/config"
 	"github.com/peterwwillis/zop/internal/provider"
+	"github.com/peterwwillis/zop/internal/tts"
 )
 
 const (
@@ -32,6 +33,7 @@ type Controller struct {
 	messages       []provider.Message
 	sessionMgr     *chat.Manager
 	sessionBase    string
+	speaker        tts.Speaker
 }
 
 // NewController loads configuration and prepares a provider instance.
@@ -54,11 +56,15 @@ func NewController(configPath, sessionName, agentName string) (*Controller, erro
 	if agentName == "" {
 		agentName = defaultAgentName(cfg)
 	}
+
+	speaker, _ := tts.NewSpeaker()
+
 	ctrl := &Controller{
 		cfg:         cfg,
 		configPath:  configPath,
 		agentName:   agentName,
 		sessionBase: sessionName,
+		speaker:     speaker,
 	}
 
 	sessionMgr, err := chat.NewManager("")
@@ -197,6 +203,40 @@ func (c *Controller) SendPrompt(ctx context.Context, prompt string, streamFunc f
 		}
 	}
 	return resp.Content, nil
+}
+
+// Speak converts text to speech and plays it.
+func (c *Controller) Speak(ctx context.Context, text string) error {
+	c.mu.Lock()
+	speaker := c.speaker
+	c.mu.Unlock()
+
+	if speaker == nil {
+		return fmt.Errorf("voice output is not enabled")
+	}
+	return speaker.Speak(ctx, text)
+}
+
+// WaitSpeaker waits for voice output to finish.
+func (c *Controller) WaitSpeaker() error {
+	c.mu.Lock()
+	speaker := c.speaker
+	c.mu.Unlock()
+
+	if speaker != nil {
+		return speaker.Wait()
+	}
+	return nil
+}
+
+// Close releases controller resources.
+func (c *Controller) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.speaker != nil {
+		return c.speaker.Close()
+	}
+	return nil
 }
 
 func (c *Controller) reloadProviderLocked() error {

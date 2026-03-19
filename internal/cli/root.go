@@ -17,6 +17,7 @@ import (
 	"github.com/peterwwillis/zop/internal/chat"
 	"github.com/peterwwillis/zop/internal/config"
 	"github.com/peterwwillis/zop/internal/provider"
+	"github.com/peterwwillis/zop/internal/tts"
 	"github.com/peterwwillis/zop/internal/whisper"
 )
 
@@ -80,6 +81,7 @@ The prompt can be supplied as:
 	root.Flags().BoolP("stream", "s", false, "stream response to stdout")
 	root.Flags().BoolP("voice", "V", false, "record prompt from microphone (requires whisper-enabled build)")
 	root.Flags().Bool("voice-manual", false, "disable silence auto-stop in voice mode; press Ctrl-D when ready")
+	root.Flags().BoolP("tts", "T", false, "output response to voice (requires tts-enabled build)")
 
 	// Subcommands
 	root.AddCommand(newChatCmd(gf))
@@ -123,20 +125,36 @@ func runCompletion(cmd *cobra.Command, args []string, gf *globalFlags) error {
 		if err := os.Setenv("ZOP_DEBUG_VAD", "1"); err != nil {
 			return fmt.Errorf("enabling debug diagnostics: %w", err)
 		}
+		if err := os.Setenv("ZOP_DEBUG_TTS", "1"); err != nil {
+			return fmt.Errorf("enabling debug diagnostics: %w", err)
+		}
 	}
 
 	if gf.verbose {
 		fmt.Fprintf(errOut, "[zop] agent=%s provider=%s model=%s\n",
 			gf.agent, agent.Provider, modelCfg.ModelID)
 		if gf.debug {
-			fmt.Fprintln(errOut, "[zop] debug diagnostics enabled (ZOP_DEBUG_VAD=1)")
+			fmt.Fprintln(errOut, "[zop] debug diagnostics enabled (ZOP_DEBUG_VAD=1, ZOP_DEBUG_TTS=1)")
 		}
 	}
 
 	voice, _ := cmd.Flags().GetBool("voice")
 	voiceManual, _ := cmd.Flags().GetBool("voice-manual")
+	voiceOut, _ := cmd.Flags().GetBool("tts")
 	promptFlag, _ := cmd.Flags().GetString("prompt")
 	interactive, _ := cmd.Flags().GetBool("interactive")
+
+	var speaker tts.Speaker
+	if voiceOut {
+		speaker, err = tts.NewSpeaker()
+		if err != nil {
+			return fmt.Errorf("initializing voice output: %w", err)
+		}
+		defer func() {
+			_ = speaker.Wait()
+			_ = speaker.Close()
+		}()
+	}
 
 	if voice && promptFlag != "" {
 		return fmt.Errorf("cannot use --voice with --prompt")
@@ -346,6 +364,11 @@ func runCompletion(cmd *cobra.Command, args []string, gf *globalFlags) error {
 				fmt.Fprintln(out, resp.Content)
 			} else {
 				fmt.Fprintln(out)
+			}
+			if speaker != nil {
+				if err := speaker.Speak(context.Background(), resp.Content); err != nil {
+					fmt.Fprintf(errOut, "[zop] warning: could not output voice: %v\n", err)
+				}
 			}
 			messages = append(reqMessages, provider.Message{Role: "assistant", Content: resp.Content})
 			if chatName != "" && sessionMgr != nil {
