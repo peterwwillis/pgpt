@@ -10,67 +10,63 @@ import (
 	"github.com/gen2brain/malgo"
 )
 
-var (
-	mctx   *malgo.AllocatedContext
-	mctxMu sync.Mutex
-)
-
-func getMalgoContext() (*malgo.AllocatedContext, error) {
-	mctxMu.Lock()
-	defer mctxMu.Unlock()
-	if mctx != nil {
-		return mctx, nil
-	}
-	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
-	if err != nil {
-		return nil, err
-	}
-	mctx = ctx
-	return mctx, nil
-}
-
 type audioPlayer struct {
 	mctx   *malgo.AllocatedContext
 	device *malgo.Device
 	mu     sync.Mutex
 	queue  [][]float32
-	done   chan struct{}
 }
 
 func newAudioPlayer(sampleRate int) (*audioPlayer, error) {
-	ctx, err := getMalgoContext()
+	mctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	p := &audioPlayer{
-		mctx: ctx,
-		done: make(chan struct{}),
+		mctx: mctx,
 	}
 
-	deviceConfig := malgo.DefaultDeviceConfig(malgo.Playback)
-	deviceConfig.Playback.Format = malgo.FormatF32
-	deviceConfig.Playback.Channels = 1
-	deviceConfig.SampleRate = uint32(sampleRate)
-
-	callbacks := malgo.DeviceCallbacks{
-		Data: p.onAudio,
+	// Log active backend
+	if os.Getenv("ZOP_DEBUG_TTS") == "1" {
+		// Attempt to get backend name via a small hack or just list
+		fmt.Fprintf(os.Stderr, "[zop] tts: malgo context initialized\n")
 	}
 
-	device, err := malgo.InitDevice(p.mctx.Context, deviceConfig, callbacks)
+	cfg := malgo.DefaultDeviceConfig(malgo.Playback)
+	cfg.Playback.Format = malgo.FormatF32
+	cfg.Playback.Channels = 1
+	cfg.SampleRate = uint32(sampleRate)
+	cfg.Alsa.NoMMap = 1
+
+	if os.Getenv("ZOP_DEBUG_TTS") == "1" {
+		fmt.Fprintf(os.Stderr, "[zop] tts: opening playback device at %d Hz\n", sampleRate)
+	}
+
+	device, err := malgo.InitDevice(mctx.Context, cfg, malgo.DeviceCallbacks{
+		Data: func(pOutput, pInput []byte, frameCount uint32) {
+			p.onAudio(pOutput, pInput, frameCount)
+		},
+	})
 	if err != nil {
+		_ = mctx.Uninit()
+		mctx.Free()
 		return nil, err
 	}
-
 	p.device = device
 
 	if err := device.Start(); err != nil {
 		device.Uninit()
+		_ = mctx.Uninit()
+		mctx.Free()
 		return nil, err
 	}
 
+	// Give it a moment to start up
+	time.Sleep(100 * time.Millisecond)
+
 	if os.Getenv("ZOP_DEBUG_TTS") == "1" {
-		fmt.Fprintf(os.Stderr, "[zop] tts: device started, sample rate %d\n", sampleRate)
+		fmt.Fprintf(os.Stderr, "[zop] tts: device started\n")
 	}
 
 	return p, nil
@@ -104,50 +100,60 @@ func (p *audioPlayer) Wait() {
 	}
 }
 
-func (p *audioPlayer) onAudio(_, output []byte, frameCount uint32) {
-	if len(output) == 0 {
+func (p *audioPlayer) onAudio(pOutput, pInput []byte, frameCount uint32) {
+	// ALWAYS clear pOutput (silence) first
+	for i := range pOutput {
+		pOutput[i] = 0
+	}
+
+	if !p.mu.TryLock() {
 		return
 	}
-	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if len(p.queue) == 0 {
 		return
 	}
 
-	if os.Getenv("ZOP_DEBUG_TTS") == "1" {
-		// Only log occasionally to avoid flooding
-		if time.Now().UnixNano()%100 == 0 {
-			fmt.Fprintf(os.Stderr, "[zop] tts: playing audio callback, frameCount=%d, queue_len=%d\n", frameCount, len(p.queue))
-		}
-	}
+	// Each float32 is 4 bytes.
+	totalBytesNeeded := uint32(len(pOutput))
+	var bytesWritten uint32
 
-	// malgo uses byte slices, we need to treat them as float32
-	// each float32 is 4 bytes
-	out := (*[1 << 30]float32)(unsafe.Pointer(&output[0]))[:frameCount:frameCount]
-
-	var framesWritten uint32
-	for framesWritten < frameCount && len(p.queue) > 0 {
+	for bytesWritten < totalBytesNeeded && len(p.queue) > 0 {
 		current := p.queue[0]
-		toWrite := frameCount - framesWritten
-		if uint32(len(current)) < toWrite {
-			toWrite = uint32(len(current))
+		bytesInCurrent := uint32(len(current) * 4)
+		
+		toCopy := totalBytesNeeded - bytesWritten
+		if bytesInCurrent < toCopy {
+			toCopy = bytesInCurrent
 		}
 
-		copy(out[framesWritten:], current[:toWrite])
-		framesWritten += toWrite
+		if toCopy > 0 {
+			src := unsafe.Slice((*byte)(unsafe.Pointer(&current[0])), len(current)*4)
+			copy(pOutput[bytesWritten:], src[:toCopy])
+			
+			bytesWritten += toCopy
 
-		if toWrite == uint32(len(current)) {
-			p.queue = p.queue[1:]
+			if toCopy == bytesInCurrent {
+				p.queue = p.queue[1:]
+			} else {
+				samplesConsumed := toCopy / 4
+				p.queue[0] = current[samplesConsumed:]
+			}
 		} else {
-			p.queue[0] = current[toWrite:]
+			break
 		}
 	}
 }
 
 func (p *audioPlayer) Close() error {
+	p.Wait()
 	if p.device != nil {
 		p.device.Uninit()
+	}
+	if p.mctx != nil {
+		_ = p.mctx.Uninit()
+		p.mctx.Free()
 	}
 	return nil
 }
