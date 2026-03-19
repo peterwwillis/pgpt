@@ -38,6 +38,7 @@ The `Controller` is the central orchestrator used by both the CLI and Mobile UI.
 - **Makefile**: Always use the `Makefile` for setup and builds.
 - **Go Version**: Defined in `go.mod`. Use `make setup-go` if the environment lacks the correct version.
 - **CGO / Voice (Whisper & TTS)**: Voice support requires CGO and external C++ libraries. The `Makefile` handles fetching and building `whisper.cpp` and `sherpa-onnx`.
+- **Optimization**: The `sherpa-onnx` build uses the `Release` build type for maximum performance. The final binary size is ~32MB.
 - **Build Tags**: Use `-tags "whisper tts"` for full voice-enabled builds.
 
 ### Testing Strategy
