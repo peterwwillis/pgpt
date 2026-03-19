@@ -205,7 +205,6 @@ tts-clean:
 
 ## build-bin: Build the zop CLI binary for a specific platform.
 ##   Defaults to the current host platform; override any variable as needed.
-##
 ##   Examples:
 ##     make build-bin
 ##     make build-bin GOOS=linux GOARCH=amd64 CGO_ENABLED=1 BUILD_TAGS=whisper VERSION=v1.0.0
@@ -217,6 +216,15 @@ build-bin:
 		$(_tag_args) \
 		-ldflags="-s -w -X github.com/peterwwillis/zop/internal/cli.Version=$(VERSION)" \
 		-o $(BINARY) \
+		./cmd/zop
+
+## build-static: Build a fully static CLI binary (Linux only, requires static system libs).
+build-static: $(_whisper_dep) $(_tts_dep)
+	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+	go build \
+		$(_tag_args) \
+		-ldflags='-s -w -extldflags "-static" -X github.com/peterwwillis/zop/internal/cli.Version=$(VERSION)' \
+		-o $(BINARY)-static \
 		./cmd/zop
 
 build-bin-clean:
