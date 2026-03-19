@@ -60,6 +60,24 @@ system_prompt = "You are a test model."
 	assert.Equal(t, "You are a test model.", model.SystemPrompt)
 }
 
+func TestLoadMCPConfig(t *testing.T) {
+	content := `
+[mcp_servers.test-mcp]
+command = "echo"
+args = ["hello"]
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+
+	assert.Contains(t, cfg.MCPServers, "test-mcp")
+	assert.Equal(t, "echo", cfg.MCPServers["test-mcp"].Command)
+	assert.Equal(t, []string{"hello"}, cfg.MCPServers["test-mcp"].Args)
+}
+
 func TestGetAgentNotFound(t *testing.T) {
 	cfg, err := config.Load(tempConfigPath(t))
 	require.NoError(t, err)

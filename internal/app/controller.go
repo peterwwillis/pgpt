@@ -101,6 +101,13 @@ func (c *Controller) ActiveAgent() string {
 	return c.agentName
 }
 
+// SetProvider overrides the current provider. (Primarily for testing)
+func (c *Controller) SetProvider(p provider.Provider) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.prov = p
+}
+
 // MissingAPIKeyWarning returns a warning string if the provider expects an API key.
 func (c *Controller) MissingAPIKeyWarning() string {
 	c.mu.Lock()
