@@ -11,7 +11,7 @@ voice input via Whisper in whisper-enabled builds.
 
 - **Multiple providers**: OpenAI, Anthropic (Claude), Google (Gemini), OpenRouter, Ollama
 - **TOML config**: Define multiple named *agents*, *providers*, *models*, and *MCP servers* in `~/.config/zop/config.toml`
-- **Tool Calling**: Models can execute tools, including a built-in `run_command` tool
+- **Tool Calling**: Models can execute tools (disabled by default; use `--tools` or config to enable)
 - **Model Context Protocol (MCP)**: Connect to external tools via MCP servers
 - **Instruction Autoloading**: Automatically loads `ZOP.md` from the config directory as global instructions
 - **Chat sessions**: Persistent multi-turn conversations stored locally
@@ -54,6 +54,9 @@ zop --interactive
 
 # Stream the response
 zop --stream "Write a haiku about Go"
+
+# Enable tool calling support (disabled by default)
+zop --tools "List the files in the current directory"
 
 # Voice input (whisper-enabled build)
 zop --voice
@@ -103,6 +106,7 @@ export OPENROUTER_API_KEY="..."
 provider = "openai"
 model    = "gpt4o"
 system_prompt = "You are a helpful assistant."
+enable_tools  = true
 
 [agents.claude]
 provider = "anthropic"
@@ -180,6 +184,12 @@ url = "http://localhost:8080/mcp/sse"
 Tools provided by these servers will be automatically registered and made available to models that support tool calling (OpenAI, Anthropic, Google Gemini) in both the CLI and Mobile UI.
 
 ## Tool Call Security Policies
+
+Tool calling is **disabled by default** to ensure predictable behavior and security. You must explicitly enable it to allow models to use tools.
+
+### Enabling Tool Calling
+- **CLI Flag**: Use `--tools` (or `-T`) to enable tools for a single command.
+- **Configuration**: Set `enable_tools = true` globally or per-agent in your `config.toml`.
 
 `zop` provides a flexible security policy system for tool calls, allowing you to control which commands the `run_command` tool is allowed to execute. Policies can be defined globally or overridden per-agent.
 

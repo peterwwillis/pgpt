@@ -129,6 +129,7 @@ type AgentConfig struct {
 	Model        string      `toml:"model"`
 	SystemPrompt string      `toml:"system_prompt"`
 	ToolPolicy   *ToolPolicy `toml:"tool_policy,omitempty"`
+	EnableTools  bool        `toml:"enable_tools"`
 }
 
 // ProviderConfig holds connection settings for an AI provider.
@@ -156,11 +157,12 @@ type ModelConfig struct {
 
 // Config is the top-level configuration structure.
 type Config struct {
-	Agents     map[string]AgentConfig     `toml:"agents"`
-	Providers  map[string]ProviderConfig  `toml:"providers"`
-	Models     map[string]ModelConfig     `toml:"models"`
-	MCPServers map[string]MCPServerConfig `toml:"mcp_servers"`
-	ToolPolicy ToolPolicy                 `toml:"tool_policy"`
+	Agents      map[string]AgentConfig     `toml:"agents"`
+	Providers   map[string]ProviderConfig  `toml:"providers"`
+	Models      map[string]ModelConfig     `toml:"models"`
+	MCPServers  map[string]MCPServerConfig `toml:"mcp_servers"`
+	ToolPolicy  ToolPolicy                 `toml:"tool_policy"`
+	EnableTools bool                       `toml:"enable_tools"`
 }
 
 // ToolPolicy defines allowlist and denylist for tool calls.

@@ -37,6 +37,7 @@ type globalFlags struct {
 	agent      string
 	verbose    bool
 	debug      bool
+	tools      bool
 }
 
 var sessionPartSanitizer = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
@@ -73,6 +74,7 @@ The prompt can be supplied as:
 	root.PersistentFlags().StringVarP(&gf.agent, "agent", "a", "default", "agent to use (defined in config)")
 	root.PersistentFlags().BoolVarP(&gf.verbose, "verbose", "v", false, "verbose output")
 	root.PersistentFlags().BoolVarP(&gf.debug, "debug", "d", false, "enable debug diagnostics (sets ZOP_DEBUG_VAD=1)")
+	root.PersistentFlags().BoolVarP(&gf.tools, "tools", "T", false, "enable tool calling support")
 
 	// Completion-specific flags (attached to root so they appear in help)
 	root.Flags().StringP("chat", "c", "", "chat session name for multi-turn conversations")
@@ -261,6 +263,14 @@ func runCompletion(cmd *cobra.Command, args []string, gf *globalFlags) error {
 		messages = append(messages, provider.Message{Role: "system", Content: zopInstructions})
 	}
 
+	useTools := gf.tools || agent.EnableTools || cfg.EnableTools
+	if useTools {
+		messages = append(messages, provider.Message{
+			Role:    "system",
+			Content: "You have access to tools. Use them ONLY when explicitly required by the user's request or necessary to fulfill it. If you can provide a high-quality response without tools, do so.",
+		})
+	}
+
 	// Keep the system-prompt slice so we can reset history when rotating to a
 	// fresh session after hitting provider context limits.
 	baseMessages := append([]provider.Message(nil), messages...)
@@ -368,12 +378,16 @@ func runCompletion(cmd *cobra.Command, args []string, gf *globalFlags) error {
 			}
 			currentMessages := append(append([]provider.Message(nil), messages...), userMessage)
 			for {
+				var tools []provider.Tool
+				if useTools {
+					tools = registry.List()
+				}
 				req := provider.CompletionRequest{
 					Messages:   currentMessages,
 					Model:      modelCfg,
 					Stream:     streamFlag,
 					StreamFunc: streamFn,
-					Tools:      registry.List(),
+					Tools:      tools,
 				}
 				resp, rerr := prov.Complete(context.Background(), req)
 				if rerr != nil {

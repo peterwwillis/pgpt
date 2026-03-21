@@ -34,6 +34,7 @@ type Controller struct {
 	sessionMgr     *chat.Manager
 	sessionBase    string
 	toolRegistry   *tool.Registry
+	enableTools    bool
 }
 
 // NewController loads configuration and prepares a provider instance.
@@ -183,6 +184,13 @@ func (c *Controller) resetMessagesLocked() error {
 	} else if zopInstructions != "" {
 		c.messages = append(c.messages, provider.Message{Role: "system", Content: zopInstructions})
 	}
+
+	if c.enableTools {
+		c.messages = append(c.messages, provider.Message{
+			Role:    "system",
+			Content: "You have access to tools. Use them ONLY when explicitly required by the user's request or necessary to fulfill it. If you can provide a high-quality response without tools, do so.",
+		})
+	}
 	return nil
 }
 
@@ -201,18 +209,23 @@ func (c *Controller) SendPrompt(ctx context.Context, prompt string, streamFunc f
 	sessionMgr := c.sessionMgr
 	sessionName := c.sessionNameLocked()
 	registry := c.toolRegistry
+	enableTools := c.enableTools
 	c.mu.Unlock()
 
 	messages = append(messages, provider.Message{Role: "user", Content: prompt})
 
 	var lastContent string
 	for {
+		var tools []provider.Tool
+		if enableTools {
+			tools = registry.List()
+		}
 		req := provider.CompletionRequest{
 			Messages:   messages,
 			Model:      modelCfg,
 			Stream:     streamFunc != nil,
 			StreamFunc: streamFunc,
-			Tools:      registry.List(),
+			Tools:      tools,
 		}
 		resp, err := prov.Complete(ctx, req)
 		if err != nil {
@@ -295,6 +308,7 @@ func (c *Controller) reloadProviderLocked() error {
 	} else if modelCfg.SystemPrompt != "" {
 		c.systemPrompt = modelCfg.SystemPrompt
 	}
+	c.enableTools = agent.EnableTools || c.cfg.EnableTools
 
 	// Reload tools/MCP
 	c.toolRegistry = tool.NewRegistry()
