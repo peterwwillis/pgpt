@@ -238,7 +238,16 @@ func (c *Controller) SendPrompt(ctx context.Context, prompt string, streamFunc f
 	toolsEnabled := c.toolsEnabled
 	c.mu.Unlock()
 
-	messages = append(messages, provider.Message{Role: "user", Content: prompt})
+	tmplStr, err := c.resolveUserPromptTemplate()
+	if err != nil {
+		return "", err
+	}
+	finalPrompt, err := c.executeTemplate(tmplStr, prompt)
+	if err != nil {
+		return "", err
+	}
+
+	messages = append(messages, provider.Message{Role: "user", Content: finalPrompt})
 
 	var lastContent string
 	for {
@@ -363,10 +372,16 @@ func (c *Controller) reloadProviderLocked() error {
 	c.providerConfig = provCfg
 	c.prov = prov
 	c.systemPrompt = ""
-	if agent.SystemPrompt != "" {
-		c.systemPrompt = agent.SystemPrompt
-	} else if modelCfg.SystemPrompt != "" {
-		c.systemPrompt = modelCfg.SystemPrompt
+
+	tmplStr, err := c.resolveSystemPrompt()
+	if err != nil {
+		return err
+	}
+	if tmplStr != "" {
+		c.systemPrompt, err = c.executeTemplate(tmplStr, "")
+		if err != nil {
+			return err
+		}
 	}
 
 	// Reload tools/MCP

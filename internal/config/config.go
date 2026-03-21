@@ -35,9 +35,28 @@ model    = "gemini-pro"
 provider = "openrouter"
 model    = "openrouter-default"
 
+[agents.summarizer]
+provider = "openai"
+model    = "gpt4o"
+prompt_template = "summarizer"
+
 [agents.ollama]
 provider = "ollama"
 model    = "llama3"
+
+# ─────────────────────────────────────────────
+# Templates – reusable Go templates for system/user prompts
+# Data available: .Input, .Config, .Agent, .Model, .Env
+# Functions available: now, date, time, upper, lower, trim, indent
+# ─────────────────────────────────────────────
+
+[templates.expert]
+system_prompt = "You are an expert in your field. The current date is {{date}}."
+prompt = "Please explain the following in great detail: {{.Input}}"
+
+[templates.summarizer]
+system_prompt = "You are a helpful assistant that summarizes text concisely."
+prompt = "Summarize the following text:\n\n{{.Input}}"
 
 # ─────────────────────────────────────────────
 # Providers
@@ -135,11 +154,16 @@ safety_delay_ms = 10
 
 // AgentConfig defines a named agent that pairs a provider with a model.
 type AgentConfig struct {
-	Provider     string      `toml:"provider"`
-	Model        string      `toml:"model"`
-	SystemPrompt string      `toml:"system_prompt"`
-	ToolPolicy   *ToolPolicy `toml:"tool_policy,omitempty"`
-	DisableTools bool        `toml:"disable_tools"`
+	Provider             string      `toml:"provider"`
+	Model                string      `toml:"model"`
+	SystemPrompt         string      `toml:"system_prompt"`
+	SystemPromptFile     string      `toml:"system_prompt_file"`
+	SystemPromptTemplate string      `toml:"system_prompt_template"`
+	Prompt               string      `toml:"prompt"`
+	PromptFile           string      `toml:"prompt_file"`
+	PromptTemplate       string      `toml:"prompt_template"`
+	ToolPolicy           *ToolPolicy `toml:"tool_policy,omitempty"`
+	DisableTools         bool        `toml:"disable_tools"`
 }
 
 // ProviderConfig holds connection settings for an AI provider.
@@ -162,7 +186,17 @@ type ModelConfig struct {
 	// RepeatPenalty / frequency_penalty (OpenAI) / repetition_penalty.
 	RepeatPenalty float32 `toml:"repeat_penalty"`
 	// SystemPrompt defines a model-specific system prompt.
-	SystemPrompt string `toml:"system_prompt"`
+	SystemPrompt         string `toml:"system_prompt"`
+	SystemPromptFile     string `toml:"system_prompt_file"`
+	SystemPromptTemplate string `toml:"system_prompt_template"`
+}
+
+// TemplateConfig defines a reusable prompt template.
+type TemplateConfig struct {
+	SystemPrompt     string `toml:"system_prompt"`
+	SystemPromptFile string `toml:"system_prompt_file"`
+	Prompt           string `toml:"prompt"`
+	PromptFile       string `toml:"prompt_file"`
 }
 
 // TTSConfig holds settings for text-to-speech output.
@@ -179,12 +213,12 @@ type Config struct {
 	Agents       map[string]AgentConfig     `toml:"agents"`
 	Providers    map[string]ProviderConfig  `toml:"providers"`
 	Models       map[string]ModelConfig     `toml:"models"`
+	Templates    map[string]TemplateConfig   `toml:"templates"`
 	MCPServers   map[string]MCPServerConfig `toml:"mcp_servers"`
 	ToolPolicy   ToolPolicy                 `toml:"tool_policy"`
 	DisableTools bool                       `toml:"disable_tools"`
 	TTS          TTSConfig                  `toml:"tts"`
 }
-
 // ToolPolicy defines allowlist and denylist for tool calls.
 type ToolPolicy struct {
 	AllowList []ToolEntry `toml:"allow_list"`
@@ -382,6 +416,7 @@ func LoadRaw(path string) (RawConfig, error) {
 	ensureSection(raw, "agents")
 	ensureSection(raw, "providers")
 	ensureSection(raw, "models")
+	ensureSection(raw, "templates")
 	ensureSection(raw, "mcp_servers")
 	ensureSection(raw, "tool_policy")
 
