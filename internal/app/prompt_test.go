@@ -44,15 +44,15 @@ model_id = "gpt-4o"
 	t.Setenv("ZOP_TEST_USER", "Alice")
 	t.Setenv("OPENAI_API_KEY", "fake-key")
 
-	t.Run("DefaultAgentNoTemplate", func(t *testing.T) {
+	t.Run("DefaultAgentNoTemplateLiteral", func(t *testing.T) {
 		ctrl, err := NewController(configPath, "test-session", "default")
 		require.NoError(t, err)
 
-		// User input as template
+		// User input as literal
 		prompt := "Tell me the date: {{date}}"
 		finalPrompt, err := ctrl.executeTemplate("", prompt)
 		require.NoError(t, err)
-		assert.Contains(t, finalPrompt, "Tell me the date: 20") // Should contain current year
+		assert.Equal(t, prompt, finalPrompt) // Should be literal
 	})
 
 	t.Run("SummarizerTemplate", func(t *testing.T) {
