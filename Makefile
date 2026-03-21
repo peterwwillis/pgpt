@@ -42,6 +42,8 @@ export PATH := $(GO_INSTALL_DIR)/bin:$(PATH)
 
 WHISPER_CPP_VERSION ?= v1.8.3
 WHISPER_CPP_DIR     ?= internal/whisper/whisper.cpp
+SHERPA_ONNX_VERSION ?= v1.10.43
+SHERPA_ONNX_DIR     ?= internal/tts/_lib
 
 # Version injected into the binary; override with e.g. make build-bin VERSION=v1.2.3
 VERSION      ?= dev
@@ -49,14 +51,14 @@ VERSION      ?= dev
 ANDROID_APP_ID ?= com.zop.app
 ANDROID_ARCH   ?= arm64
 
-# Build tags — defaults to whisper; override with BUILD_TAGS="" for a no-whisper build
-BUILD_TAGS   ?= whisper
+# Build tags — defaults to whisper and tts; override with BUILD_TAGS="" for a minimal build
+BUILD_TAGS   ?= whisper tts
 # Optional: extra arguments forwarded to go test (e.g. TEST_ARGS="-race -coverprofile=coverage.out")
 TEST_ARGS    ?=
 # Appended to the release binary name before the OS extension (e.g. BINARY_SUFFIX=-nowhisper)
 BINARY_SUFFIX ?=
 
-# CGO required for whisper; override with CGO_ENABLED=0 when BUILD_TAGS is empty
+# CGO required for whisper and tts; override with CGO_ENABLED=0 when BUILD_TAGS is empty
 CGO_ENABLED ?= 1
 
 # Default to the host platform so that build-bin works without Go pre-installed.
@@ -84,15 +86,17 @@ _tag_args = $(if $(BUILD_TAGS),-tags "$(BUILD_TAGS)",)
 # Evaluates to empty when BUILD_TAGS does not contain 'whisper', so overriding
 # BUILD_TAGS="" also drops the whisper-fetch dependency automatically.
 _whisper_dep = $(if $(filter whisper,$(BUILD_TAGS)),whisper-fetch,)
+_tts_dep     = $(if $(filter tts,$(BUILD_TAGS)),tts-fetch,)
 
 # ==============================================================
 # Phony targets
 # ==============================================================
 
-.PHONY: all deps vet build test \
+.PHONY: all deps vet build clean test \
         whisper-fetch whisper-clean \
+        tts-fetch tts-clean \
         vet-whisper build-whisper test-whisper \
-        build-bin android-apk screenshot \
+        build-bin build-bin-clean android-apk screenshot \
         setup-go setup-go-clean go-env
 
 all: build
@@ -101,21 +105,23 @@ all: build
 # Standard Go targets
 # ==============================================================
 
+clean: whisper-clean tts-clean build-bin-clean
+
 ## deps: Download Go module dependencies
 deps:
 	go mod download
 
 ## vet: Run go vet (respects BUILD_TAGS; fetches whisper.cpp when BUILD_TAGS=whisper)
-vet: $(_whisper_dep)
+vet: $(_whisper_dep) $(_tts_dep)
 	CGO_ENABLED=$(CGO_ENABLED) go vet $(_tag_args) ./...
 
 ## build: Compile all packages (respects BUILD_TAGS; fetches whisper.cpp when BUILD_TAGS=whisper)
-build: $(_whisper_dep)
+build: $(_whisper_dep) $(_tts_dep)
 	CGO_ENABLED=$(CGO_ENABLED) go build $(_tag_args) ./...
 
 ## test: Run tests (respects BUILD_TAGS and TEST_ARGS; fetches whisper.cpp when BUILD_TAGS=whisper)
 ##   Example: make test TEST_ARGS="-race -coverprofile=coverage.out"
-test: $(_whisper_dep)
+test: $(_whisper_dep) $(_tts_dep)
 	CGO_ENABLED=$(CGO_ENABLED) go test $(_tag_args) $(TEST_ARGS) ./...
 
 # ==============================================================
@@ -158,12 +164,49 @@ test-whisper: whisper-fetch
 	CGO_ENABLED=1 go test -race -tags whisper ./...
 
 # ==============================================================
+# Sherpa-onnx support
+# ==============================================================
+
+$(SHERPA_ONNX_DIR)/.git:
+	git clone --depth 1 --branch $(SHERPA_ONNX_VERSION) \
+		https://github.com/k2-fsa/sherpa-onnx $(SHERPA_ONNX_DIR)
+
+$(SHERPA_ONNX_DIR)/build/lib/libsherpa-onnx-c-api.a: $(SHERPA_ONNX_DIR)/.git
+	cmake \
+		-S $(SHERPA_ONNX_DIR) \
+		-B $(SHERPA_ONNX_DIR)/build \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DBUILD_SHARED_LIBS=OFF \
+		-DSHERPA_ONNX_ENABLE_PYTHON=OFF \
+		-DSHERPA_ONNX_ENABLE_TESTS=OFF \
+		-DSHERPA_ONNX_ENABLE_CHECK=OFF \
+		-DSHERPA_ONNX_ENABLE_C_API=ON \
+		-DSHERPA_ONNX_ENABLE_WASM=OFF \
+		-DSHERPA_ONNX_ENABLE_BINARY=OFF \
+		-DSHERPA_ONNX_ENABLE_GPU=OFF \
+		-DSHERPA_ONNX_ENABLE_SPEAKER_DIARIZATION=OFF \
+		-DSHERPA_ONNX_ENABLE_PORTAUDIO=OFF \
+		-DSHERPA_ONNX_ENABLE_WEBSOCKET=OFF \
+		-DSHERPA_ONNX_BUILD_C_API_EXAMPLES=OFF
+	cmake --build $(SHERPA_ONNX_DIR)/build --target sherpa-onnx-c-api
+
+## tts-fetch: Clone and build sherpa-onnx (idempotent via sentinel files)
+tts-fetch: $(SHERPA_ONNX_DIR)/build/lib/libsherpa-onnx-c-api.a
+	mkdir -p $(SHERPA_ONNX_DIR)/include
+	mkdir -p $(SHERPA_ONNX_DIR)/build/lib
+	cp $(SHERPA_ONNX_DIR)/sherpa-onnx/c-api/c-api.h $(SHERPA_ONNX_DIR)/include/
+	find $(SHERPA_ONNX_DIR)/build -name "*.a" -exec cp {} $(SHERPA_ONNX_DIR)/build/lib/ \;
+
+## tts-clean: Remove the sherpa-onnx source and build tree
+tts-clean:
+	rm -rf $(SHERPA_ONNX_DIR)
+
+# ==============================================================
 # Release build
 # ==============================================================
 
 ## build-bin: Build the zop CLI binary for a specific platform.
 ##   Defaults to the current host platform; override any variable as needed.
-##
 ##   Examples:
 ##     make build-bin
 ##     make build-bin GOOS=linux GOARCH=amd64 CGO_ENABLED=1 BUILD_TAGS=whisper VERSION=v1.0.0
@@ -175,6 +218,15 @@ build-bin:
 		$(_tag_args) \
 		-ldflags="-s -w -X github.com/peterwwillis/zop/internal/cli.Version=$(VERSION)" \
 		-o $(BINARY) \
+		./cmd/zop
+
+## build-static: Build a fully static CLI binary (Linux only, requires static system libs).
+build-static: $(_whisper_dep) $(_tts_dep)
+	CGO_ENABLED=1 GOOS=linux GOARCH=$(GOARCH) \
+	go build \
+		$(_tag_args) \
+		-ldflags='-s -w -extldflags "-static" -X github.com/peterwwillis/zop/internal/cli.Version=$(VERSION)' \
+		-o $(BINARY)-static \
 		./cmd/zop
 
 build-bin-clean:

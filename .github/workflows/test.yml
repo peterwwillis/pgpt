@@ -94,10 +94,37 @@ jobs:
       - name: Test (whisper)
         run: make test-whisper
 
+  test-tts:
+    name: Test with tts (Linux/amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: make deps
+
+      - name: Fetch and build sherpa-onnx
+        run: make tts-fetch
+
+      - name: Vet (tts)
+        run: make vet BUILD_TAGS="tts"
+
+      - name: Build (tts)
+        run: make build BUILD_TAGS="tts"
+
+      - name: Test (tts)
+        run: make test BUILD_TAGS="tts"
+
   release-dry-run-build:
     name: Release dry run build (${{ matrix.goos }}/${{ matrix.goarch }})
     if: github.event_name == 'pull_request'
-    needs: [test, test-whisper]
+    needs: [test, test-whisper, test-tts]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -172,7 +199,7 @@ jobs:
   release-dry-run-android:
     name: Release dry run Android APK
     if: github.event_name == 'pull_request'
-    needs: [test, test-whisper]
+    needs: [test, test-whisper, test-tts]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -203,7 +230,7 @@ jobs:
   screenshot:
     name: Capture UI screenshot
     if: github.event_name == 'pull_request'
-    needs: [test, test-whisper]
+    needs: [test, test-whisper, test-tts]
     runs-on: ubuntu-latest
     permissions:
       contents: write

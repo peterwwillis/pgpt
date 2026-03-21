@@ -121,6 +121,16 @@ model_id    = "mistral"
 max_tokens  = 4096
 temperature = 0.8
 top_p       = 0.95
+
+# ─────────────────────────────────────────────
+# Voice Output (TTS)
+# ─────────────────────────────────────────────
+[tts]
+# model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-amy-low.tar.bz2"
+# model_name = "vits-piper-en_US-amy-low"
+# piper_model = "en_US-amy-low.onnx"
+speed = 1.5
+safety_delay_ms = 10
 `
 
 // AgentConfig defines a named agent that pairs a provider with a model.
@@ -155,6 +165,15 @@ type ModelConfig struct {
 	SystemPrompt string `toml:"system_prompt"`
 }
 
+// TTSConfig holds settings for text-to-speech output.
+type TTSConfig struct {
+	ModelURL      string  `toml:"model_url"`
+	ModelName     string  `toml:"model_name"`
+	PiperModel    string  `toml:"piper_model"`
+	Speed         float32 `toml:"speed"`
+	SafetyDelayMS int     `toml:"safety_delay_ms"`
+}
+
 // Config is the top-level configuration structure.
 type Config struct {
 	Agents       map[string]AgentConfig     `toml:"agents"`
@@ -163,6 +182,7 @@ type Config struct {
 	MCPServers   map[string]MCPServerConfig `toml:"mcp_servers"`
 	ToolPolicy   ToolPolicy                 `toml:"tool_policy"`
 	DisableTools bool                       `toml:"disable_tools"`
+	TTS          TTSConfig                  `toml:"tts"`
 }
 
 // ToolPolicy defines allowlist and denylist for tool calls.

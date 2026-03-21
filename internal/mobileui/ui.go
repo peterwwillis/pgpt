@@ -66,6 +66,15 @@ func NewWindow(app fyne.App, controller *zopapp.Controller) fyne.Window {
 		buffer.AppendDirect(fmt.Sprintf("[zop] %s\n\n", warning))
 	}
 
+	voiceOutToggle := widget.NewCheck("TTS", func(b bool) {
+		if b {
+			// Try to initialize speaker if not already
+			if err := controller.ReloadConfig(); err != nil {
+				dialog.NewError(err, window).Show()
+			}
+		}
+	})
+
 	sendPrompt := func(prompt string) {
 		prompt = strings.TrimSpace(prompt)
 		if prompt == "" {
@@ -86,8 +95,17 @@ func NewWindow(app fyne.App, controller *zopapp.Controller) fyne.Window {
 			fyne.Do(func() {
 				if sendErr != nil {
 					dialog.NewError(sendErr, window).Show()
-				} else if !streamed {
-					buffer.AppendDirect(resp)
+				} else {
+					if !streamed {
+						buffer.AppendDirect(resp)
+					}
+					// Auto-speak if enabled
+					if voiceOutToggle.Checked {
+						go func() {
+							_ = controller.WaitSpeaker()
+							_ = controller.Speak(context.Background(), resp)
+						}()
+					}
 				}
 				buffer.AppendDirect("\n\n")
 				promptEntry.Enable()
@@ -158,7 +176,7 @@ func NewWindow(app fyne.App, controller *zopapp.Controller) fyne.Window {
 		}, window).Show()
 	}
 
-	topBar := container.NewHBox(statusLabel, layout.NewSpacer(), configButton)
+	topBar := container.NewHBox(statusLabel, layout.NewSpacer(), voiceOutToggle, configButton)
 	bottomBar := container.NewHBox(recordButton, layout.NewSpacer(), clearButton, copyButton, agentButton)
 	center := container.NewBorder(nil, promptEntry, nil, nil, outputScroll)
 	content := container.NewBorder(topBar, bottomBar, nil, nil, center)
