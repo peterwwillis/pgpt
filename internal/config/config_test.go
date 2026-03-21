@@ -107,10 +107,21 @@ func TestProviderAPIKey(t *testing.T) {
 	assert.Equal(t, "test-key-123", p.APIKey())
 }
 
-func TestDefaultConfigPath(t *testing.T) {
-	path := config.DefaultConfigPath()
-	assert.NotEmpty(t, path)
-	assert.Contains(t, path, "zop")
+func TestLoadZopInstructions(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	zopPath := filepath.Join(dir, "ZOP.md")
+	content := "Test instructions"
+	require.NoError(t, os.WriteFile(zopPath, []byte(content), 0600))
+
+	got, err := config.LoadZopInstructions(configPath)
+	require.NoError(t, err)
+	assert.Equal(t, content, got)
+
+	// Test missing file
+	got, err = config.LoadZopInstructions(filepath.Join(dir, "nonexistent", "config.toml"))
+	require.NoError(t, err)
+	assert.Empty(t, got)
 }
 
 func tempConfigPath(t *testing.T) string {

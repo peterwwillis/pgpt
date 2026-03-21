@@ -13,6 +13,7 @@ voice input via Whisper in whisper-enabled builds.
 - **TOML config**: Define multiple named *agents*, *providers*, *models*, and *MCP servers* in `~/.config/zop/config.toml`
 - **Tool Calling**: Models can execute tools, including a built-in `run_command` tool
 - **Model Context Protocol (MCP)**: Connect to external tools via MCP servers
+- **Instruction Autoloading**: Automatically loads `ZOP.md` from the config directory as global instructions
 - **Chat sessions**: Persistent multi-turn conversations stored locally
 - **Streaming**: Real-time token streaming via `--stream`
 - **Voice input** *(whisper-enabled builds)*: `--voice` flag for microphone input via Whisper
@@ -177,6 +178,50 @@ url = "http://localhost:8080/mcp/sse"
 ```
 
 Tools provided by these servers will be automatically registered and made available to models that support tool calling (OpenAI, Anthropic, Google Gemini) in both the CLI and Mobile UI.
+
+## Tool Call Security Policies
+
+`zop` provides a flexible security policy system for tool calls, allowing you to control which commands the `run_command` tool is allowed to execute. Policies can be defined globally or overridden per-agent.
+
+A policy consists of an `allow_list`, a `deny_list`, and tag-based filtering. If the `allow_list` is empty, all commands are allowed unless they match an entry in the `deny_list` or have a denied tag. If the `allow_list` is populated, only commands matching an entry in the list (and not denied) are allowed.
+
+### Configuration
+
+Add `tool_policy` to your `config.toml`:
+
+```toml
+[tool_policy]
+# Global tags filtering
+deny_tags = ["dangerous", "network"]
+allow_tags = ["safe"]
+
+# Deny specific commands
+deny_list = [
+    { exact = ["rm", "-rf", "/"] },
+    { regex = ".*;.*" } # Deny shell chaining
+]
+
+# Allow specific commands (if this list is not empty, it becomes restrictive)
+allow_list = [
+    { exact = ["ls", "-la"], tags = ["safe", "fs"] },
+    { regex = "^echo\\s+.*$", tags = ["safe"] },
+    { regex_array = ["cat", ".*\\.txt$"], tags = ["fs"] },
+    { exact = ["rm", "-rf", "/tmp/safe"], tags = ["dangerous"] }
+]
+
+# Per-agent overrides
+[agents.restricted]
+provider = "openai"
+model = "gpt4o"
+[agents.restricted.tool_policy]
+allow_list = [{ exact = ["ls"] }]
+```
+
+### Entry Types
+- **`exact`**: An array of strings representing the program and its arguments.
+- **`regex`**: A single regular expression that must match the entire command string.
+- **`regex_array`**: An array of regular expressions where each entry matches the corresponding part of the command.
+- **`tags`**: A list of labels associated with the entry, used for tag-based filtering.
 
 ## Building from Source
 

@@ -120,7 +120,13 @@ func runCompletion(cmd *cobra.Command, args []string, gf *globalFlags) error {
 
 	// Initialize tools/MCP
 	registry := tool.NewRegistry()
-	registry.Register(&tool.RunCommandTool{})
+	policy := cfg.ToolPolicy
+	if agent.ToolPolicy != nil {
+		policy = *agent.ToolPolicy
+	}
+	registry.Register(&tool.RunCommandTool{
+		Policy: tool.NewPolicyChecker(policy),
+	})
 	for name, mcpCfg := range cfg.MCPServers {
 		mcpClient, err := mcp.NewClient(context.Background(), mcpCfg.URL, mcpCfg.Command, mcpCfg.Args...)
 		if err != nil {
@@ -243,6 +249,16 @@ func runCompletion(cmd *cobra.Command, args []string, gf *globalFlags) error {
 		messages = append(messages, provider.Message{Role: "system", Content: agent.SystemPrompt})
 	case modelCfg.SystemPrompt != "":
 		messages = append(messages, provider.Message{Role: "system", Content: modelCfg.SystemPrompt})
+	}
+
+	// Load ZOP.md instructions
+	zopInstructions, err := config.LoadZopInstructions(gf.configFile)
+	if err != nil {
+		if gf.verbose {
+			fmt.Fprintf(errOut, "[zop] warning: could not load ZOP.md: %v\n", err)
+		}
+	} else if zopInstructions != "" {
+		messages = append(messages, provider.Message{Role: "system", Content: zopInstructions})
 	}
 
 	// Keep the system-prompt slice so we can reset history when rotating to a

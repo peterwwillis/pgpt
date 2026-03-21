@@ -62,7 +62,9 @@ func (r *Registry) List() []provider.Tool {
 }
 
 // RunCommandTool executes a shell command.
-type RunCommandTool struct{}
+type RunCommandTool struct {
+	Policy *PolicyChecker
+}
 
 func (t *RunCommandTool) Name() string {
 	return "run_command"
@@ -91,6 +93,12 @@ func (t *RunCommandTool) Execute(ctx context.Context, args string) (string, erro
 	}
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
 		return "", fmt.Errorf("unmarshaling arguments: %w", err)
+	}
+
+	if t.Policy != nil {
+		if !t.Policy.IsAllowed(input.Command) {
+			return "", fmt.Errorf("command %q is denied by tool policy", input.Command)
+		}
 	}
 
 	// For safety, in a real tool we might want to ask the user, but for now we'll just execute.

@@ -124,9 +124,10 @@ top_p       = 0.95
 
 // AgentConfig defines a named agent that pairs a provider with a model.
 type AgentConfig struct {
-	Provider     string `toml:"provider"`
-	Model        string `toml:"model"`
-	SystemPrompt string `toml:"system_prompt"`
+	Provider     string      `toml:"provider"`
+	Model        string      `toml:"model"`
+	SystemPrompt string      `toml:"system_prompt"`
+	ToolPolicy   *ToolPolicy `toml:"tool_policy,omitempty"`
 }
 
 // ProviderConfig holds connection settings for an AI provider.
@@ -154,10 +155,27 @@ type ModelConfig struct {
 
 // Config is the top-level configuration structure.
 type Config struct {
-	Agents     map[string]AgentConfig    `toml:"agents"`
-	Providers  map[string]ProviderConfig `toml:"providers"`
-	Models     map[string]ModelConfig    `toml:"models"`
+	Agents     map[string]AgentConfig     `toml:"agents"`
+	Providers  map[string]ProviderConfig  `toml:"providers"`
+	Models     map[string]ModelConfig     `toml:"models"`
 	MCPServers map[string]MCPServerConfig `toml:"mcp_servers"`
+	ToolPolicy ToolPolicy                 `toml:"tool_policy"`
+}
+
+// ToolPolicy defines allowlist and denylist for tool calls.
+type ToolPolicy struct {
+	AllowList []ToolEntry `toml:"allow_list"`
+	DenyList  []ToolEntry `toml:"deny_list"`
+	AllowTags []string    `toml:"allow_tags"`
+	DenyTags  []string    `toml:"deny_tags"`
+}
+
+// ToolEntry represents a pattern to match a tool call.
+type ToolEntry struct {
+	Exact      []string `toml:"exact,omitempty"`
+	Regex      string   `toml:"regex,omitempty"`
+	RegexArray []string `toml:"regex_array,omitempty"`
+	Tags       []string `toml:"tags,omitempty"`
 }
 
 // MCPServerConfig defines an MCP server connection.
@@ -180,6 +198,23 @@ func DefaultConfigPath() string {
 		return "config.toml"
 	}
 	return filepath.Join(home, ".config", "zop", "config.toml")
+}
+
+// LoadZopInstructions reads ZOP.md from the same directory as the config file.
+func LoadZopInstructions(configPath string) (string, error) {
+	if configPath == "" {
+		configPath = DefaultConfigPath()
+	}
+	dir := filepath.Dir(configPath)
+	path := filepath.Join(dir, "ZOP.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("reading ZOP.md: %w", err)
+	}
+	return string(data), nil
 }
 
 // Load reads a TOML config file and returns a *Config.

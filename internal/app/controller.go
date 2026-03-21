@@ -166,9 +166,20 @@ func (c *Controller) ClearSession() error {
 			return err
 		}
 	}
+	return c.resetMessagesLocked()
+}
+
+func (c *Controller) resetMessagesLocked() error {
 	c.messages = nil
 	if c.systemPrompt != "" {
 		c.messages = append(c.messages, provider.Message{Role: "system", Content: c.systemPrompt})
+	}
+
+	zopInstructions, err := config.LoadZopInstructions(c.configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not load ZOP.md: %v\n", err)
+	} else if zopInstructions != "" {
+		c.messages = append(c.messages, provider.Message{Role: "system", Content: zopInstructions})
 	}
 	return nil
 }
@@ -285,7 +296,13 @@ func (c *Controller) reloadProviderLocked() error {
 
 	// Reload tools/MCP
 	c.toolRegistry = tool.NewRegistry()
-	c.toolRegistry.Register(&tool.RunCommandTool{})
+	policy := c.cfg.ToolPolicy
+	if agent.ToolPolicy != nil {
+		policy = *agent.ToolPolicy
+	}
+	c.toolRegistry.Register(&tool.RunCommandTool{
+		Policy: tool.NewPolicyChecker(policy),
+	})
 	for name, mcpCfg := range c.cfg.MCPServers {
 		mcpClient, err := mcp.NewClient(context.Background(), mcpCfg.URL, mcpCfg.Command, mcpCfg.Args...)
 		if err != nil {
@@ -307,8 +324,7 @@ func (c *Controller) reloadProviderLocked() error {
 
 func (c *Controller) loadHistoryLocked() error {
 	if c.sessionMgr == nil {
-		c.messages = nil
-		return nil
+		return c.resetMessagesLocked()
 	}
 	history, err := c.sessionMgr.Get(c.sessionNameLocked())
 	if err != nil {
@@ -318,11 +334,7 @@ func (c *Controller) loadHistoryLocked() error {
 		c.messages = history
 		return nil
 	}
-	c.messages = nil
-	if c.systemPrompt != "" {
-		c.messages = append(c.messages, provider.Message{Role: "system", Content: c.systemPrompt})
-	}
-	return nil
+	return c.resetMessagesLocked()
 }
 
 func (c *Controller) sessionNameLocked() string {
