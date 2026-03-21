@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -64,8 +65,11 @@ func TestControllerToolCalling(t *testing.T) {
 
 	configDir := t.TempDir()
 	configPath := filepath.Join(configDir, "config.toml")
-	_, err := config.EnsureConfigFile(configPath)
-	require.NoError(t, err)
+	confContent := `
+[tool_policy]
+allow_list = [{ tool = "run_command", regex = "echo tool_success" }]
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(confContent), 0600))
 
 	controller, err := zopapp.NewController(configPath, "test-session", "")
 	require.NoError(t, err)

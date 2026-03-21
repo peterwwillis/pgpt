@@ -96,8 +96,8 @@ func (t *RunCommandTool) Execute(ctx context.Context, args string) (string, erro
 	}
 
 	if t.Policy != nil {
-		if !t.Policy.IsAllowed(input.Command) {
-			return "", fmt.Errorf("command %q is denied by tool policy", input.Command)
+		if !t.Policy.IsAllowed(t.Name(), args) {
+			return "", fmt.Errorf("command is denied by tool policy")
 		}
 	}
 

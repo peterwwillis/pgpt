@@ -37,7 +37,7 @@ type globalFlags struct {
 	agent      string
 	verbose    bool
 	debug      bool
-	tools      bool
+	noTools    bool
 }
 
 var sessionPartSanitizer = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
@@ -74,7 +74,7 @@ The prompt can be supplied as:
 	root.PersistentFlags().StringVarP(&gf.agent, "agent", "a", "default", "agent to use (defined in config)")
 	root.PersistentFlags().BoolVarP(&gf.verbose, "verbose", "v", false, "verbose output")
 	root.PersistentFlags().BoolVarP(&gf.debug, "debug", "d", false, "enable debug diagnostics (sets ZOP_DEBUG_VAD=1)")
-	root.PersistentFlags().BoolVarP(&gf.tools, "tools", "T", false, "enable tool calling support")
+	root.PersistentFlags().BoolVarP(&gf.noTools, "no-tools", "T", false, "disable tool calling support")
 
 	// Completion-specific flags (attached to root so they appear in help)
 	root.Flags().StringP("chat", "c", "", "chat session name for multi-turn conversations")
@@ -129,6 +129,7 @@ func runCompletion(cmd *cobra.Command, args []string, gf *globalFlags) error {
 	registry.Register(&tool.RunCommandTool{
 		Policy: tool.NewPolicyChecker(policy),
 	})
+	checker := tool.NewPolicyChecker(policy)
 	for name, mcpCfg := range cfg.MCPServers {
 		mcpClient, err := mcp.NewClient(context.Background(), mcpCfg.URL, mcpCfg.Command, mcpCfg.Args...)
 		if err != nil {
@@ -137,7 +138,7 @@ func runCompletion(cmd *cobra.Command, args []string, gf *globalFlags) error {
 			}
 			continue
 		}
-		wrappers, err := mcp.WrapTools(context.Background(), mcpClient)
+		wrappers, err := mcp.WrapTools(context.Background(), mcpClient, checker)
 		if err != nil {
 			if gf.verbose {
 				fmt.Fprintf(cmd.ErrOrStderr(), "[zop] warning: failed to list tools for MCP server %q: %v\n", name, err)
@@ -263,7 +264,14 @@ func runCompletion(cmd *cobra.Command, args []string, gf *globalFlags) error {
 		messages = append(messages, provider.Message{Role: "system", Content: zopInstructions})
 	}
 
-	useTools := gf.tools || agent.EnableTools || cfg.EnableTools
+	useTools := !gf.noTools && !agent.DisableTools && !cfg.DisableTools
+	if useTools && len(policy.AllowList) == 0 {
+		if gf.verbose {
+			fmt.Fprintln(errOut, "[zop] tools enabled but allow_list is empty; disabling tools for this request")
+		}
+		useTools = false
+	}
+
 	if useTools {
 		messages = append(messages, provider.Message{
 			Role:    "system",

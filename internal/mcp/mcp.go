@@ -12,6 +12,11 @@ import (
 	"github.com/peterwwillis/zop/internal/provider"
 )
 
+// Authorizer is an interface for authorizing tool calls.
+type Authorizer interface {
+	IsAllowed(toolName string, args string) bool
+}
+
 // Client is a wrapper around an MCP client.
 type Client struct {
 	mcpClient  *client.Client
@@ -120,21 +125,27 @@ func (c *Client) Close() error {
 
 // ToolWrapper wraps an MCP tool into a tool.Definition.
 type ToolWrapper struct {
-	client *Client
-	name   string
-	desc   string
-	params interface{}
+	client     *Client
+	name       string
+	desc       string
+	params     interface{}
+	authorizer Authorizer
 }
 
 func (w *ToolWrapper) Name() string { return w.name }
 func (w *ToolWrapper) Description() string { return w.desc }
 func (w *ToolWrapper) Parameters() interface{} { return w.params }
 func (w *ToolWrapper) Execute(ctx context.Context, args string) (string, error) {
+	if w.authorizer != nil {
+		if !w.authorizer.IsAllowed(w.name, args) {
+			return "", fmt.Errorf("tool call %q is denied by tool policy", w.name)
+		}
+	}
 	return w.client.ExecuteTool(ctx, w.name, args)
 }
 
 // WrapTools wraps all tools from an MCP client into tool definitions.
-func WrapTools(ctx context.Context, c *Client) ([]*ToolWrapper, error) {
+func WrapTools(ctx context.Context, c *Client, auth Authorizer) ([]*ToolWrapper, error) {
 	resp, err := c.mcpClient.ListTools(ctx, mcp.ListToolsRequest{})
 	if err != nil {
 		return nil, err
@@ -142,10 +153,11 @@ func WrapTools(ctx context.Context, c *Client) ([]*ToolWrapper, error) {
 	wrappers := make([]*ToolWrapper, 0, len(resp.Tools))
 	for _, t := range resp.Tools {
 		wrappers = append(wrappers, &ToolWrapper{
-			client: c,
-			name:   t.Name,
-			desc:   t.Description,
-			params: t.InputSchema,
+			client:     c,
+			name:       t.Name,
+			desc:       t.Description,
+			params:     t.InputSchema,
+			authorizer: auth,
 		})
 	}
 	return wrappers, nil

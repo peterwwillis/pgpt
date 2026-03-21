@@ -11,7 +11,7 @@ voice input via Whisper in whisper-enabled builds.
 
 - **Multiple providers**: OpenAI, Anthropic (Claude), Google (Gemini), OpenRouter, Ollama
 - **TOML config**: Define multiple named *agents*, *providers*, *models*, and *MCP servers* in `~/.config/zop/config.toml`
-- **Tool Calling**: Models can execute tools (disabled by default; use `--tools` or config to enable)
+- **Tool Calling**: Models can execute tools (on by default if `allow_list` is populated; use `--no-tools` to disable)
 - **Model Context Protocol (MCP)**: Connect to external tools via MCP servers
 - **Instruction Autoloading**: Automatically loads `ZOP.md` from the config directory as global instructions
 - **Chat sessions**: Persistent multi-turn conversations stored locally
@@ -55,8 +55,8 @@ zop --interactive
 # Stream the response
 zop --stream "Write a haiku about Go"
 
-# Enable tool calling support (disabled by default)
-zop --tools "List the files in the current directory"
+# Disable tool calling support (enabled by default if allow_list is populated)
+zop --no-tools "How are you?"
 
 # Voice input (whisper-enabled build)
 zop --voice
@@ -106,7 +106,7 @@ export OPENROUTER_API_KEY="..."
 provider = "openai"
 model    = "gpt4o"
 system_prompt = "You are a helpful assistant."
-enable_tools  = true
+disable_tools = false
 
 [agents.claude]
 provider = "anthropic"
@@ -185,24 +185,27 @@ Tools provided by these servers will be automatically registered and made availa
 
 ## Tool Call Security Policies
 
-Tool calling is **disabled by default** to ensure predictable behavior and security. You must explicitly enable it to allow models to use tools.
+Tool calling is **enabled by default** whenever you have an `allow_list` populated in your configuration. Models will only see tool definitions that they are permitted to use.
 
-### Enabling Tool Calling
-- **CLI Flag**: Use `--tools` (or `-T`) to enable tools for a single command.
-- **Configuration**: Set `enable_tools = true` globally or per-agent in your `config.toml`.
+### Disabling Tool Calling
+If you wish to prevent models from using tools entirely:
+- **CLI Flag**: Use `--no-tools` (or `-T`) to disable tools for a single command.
+- **Configuration**: Set `disable_tools = true` globally or per-agent in your `config.toml`.
 
 `zop` provides a flexible security policy system for tool calls, allowing you to control which commands the `run_command` tool is allowed to execute. Policies can be defined globally or overridden per-agent.
 
-A policy consists of an `allow_list`, a `deny_list`, and tag-based filtering. **By default, no tools are allowed to run.** You must populate the `allow_list` to grant permission for specific commands. If a command matches both an `allow_list` entry and a `deny_list` entry (or has a denied tag), it will be denied.
+A policy consists of an `allow_list`, a `deny_list`, and tag-based filtering. **By default, no tools are allowed to run.** You must populate the `allow_list` to grant permission for specific tools or commands.
 
 ### Configuration
 
 You can manage policies using the `config` CLI command or by editing `config.toml`:
 
 ```sh
-# Allow a specific command
+# Allow a specific shell command
 zop config set tool_policy.my-allow-rule.exact '["ls", "-la"]'
-zop config set tool_policy.my-allow-rule.tags '["safe"]'
+
+# Allow an MCP tool by name
+zop config set tool_policy.mcp-rule.tool "everything.list_files"
 ```
 
 Add `tool_policy` to your `config.toml`:
@@ -213,18 +216,22 @@ Add `tool_policy` to your `config.toml`:
 deny_tags = ["dangerous", "network"]
 allow_tags = ["safe"]
 
-# Deny specific commands
-deny_list = [
-    { exact = ["rm", "-rf", "/"] },
-    { regex = ".*;.*" } # Deny shell chaining
+# Allow specific commands and MCP tools
+allow_list = [
+    # Shell command (run_command)
+    { tool = "run_command", exact = ["ls", "-la"], tags = ["safe", "fs"] },
+    
+    # MCP Tool by name
+    { tool = "sqlite.query", tags = ["safe"] },
+    
+    # MCP Tool with argument filtering (Regex on the JSON arguments string)
+    { tool = "everything.read_file", regex = "notes.txt" }
 ]
 
-# Allow specific commands (if this list is not empty, it becomes restrictive)
-allow_list = [
-    { exact = ["ls", "-la"], tags = ["safe", "fs"] },
-    { regex = "^echo\\s+.*$", tags = ["safe"] },
-    { regex_array = ["cat", ".*\\.txt$"], tags = ["fs"] },
-    { exact = ["rm", "-rf", "/tmp/safe"], tags = ["dangerous"] }
+# Deny specific tools
+deny_list = [
+    { tool = "everything.delete_file" },
+    { tool = "run_command", regex = ".*;.*" }
 ]
 
 # Per-agent overrides
@@ -232,14 +239,15 @@ allow_list = [
 provider = "openai"
 model = "gpt4o"
 [agents.restricted.tool_policy]
-allow_list = [{ exact = ["ls"] }]
+allow_list = [{ tool = "run_command", exact = ["ls"] }]
 ```
 
 ### Entry Types
-- **`exact`**: An array of strings representing the program and its arguments.
-- **`regex`**: A single regular expression that must match the entire command string.
-- **`regex_array`**: An array of regular expressions where each entry matches the corresponding part of the command.
-- **`tags`**: A list of labels associated with the entry, used for tag-based filtering.
+- **`tool`**: The name of the tool (e.g., `run_command`, `everything.list_files`). If omitted, `run_command` is assumed.
+- **`exact`**: (For `run_command`) An array of strings representing the program and its arguments.
+- **`regex`**: A regular expression that must match the command string (for `run_command`) or the JSON arguments string (for other tools).
+- **`regex_array`**: (For `run_command`) An array of regular expressions matching parts of the command.
+- **`tags`**: A list of labels associated with the entry.
 
 ## Building from Source
 

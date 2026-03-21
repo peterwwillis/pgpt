@@ -107,13 +107,13 @@ func TestProviderAPIKey(t *testing.T) {
 	assert.Equal(t, "test-key-123", p.APIKey())
 }
 
-func TestLoadEnableToolsConfig(t *testing.T) {
+func TestLoadDisableToolsConfig(t *testing.T) {
 	content := `
-enable_tools = true
+disable_tools = true
 [agents.test]
 provider = "openai"
 model = "gpt4o"
-enable_tools = false
+disable_tools = false
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -122,8 +122,8 @@ enable_tools = false
 	cfg, err := config.Load(path)
 	require.NoError(t, err)
 
-	assert.True(t, cfg.EnableTools)
-	assert.False(t, cfg.Agents["test"].EnableTools)
+	assert.True(t, cfg.DisableTools)
+	assert.False(t, cfg.Agents["test"].DisableTools)
 }
 
 func TestGetAgentDefaultFallback(t *testing.T) {

@@ -34,7 +34,7 @@ type Controller struct {
 	sessionMgr     *chat.Manager
 	sessionBase    string
 	toolRegistry   *tool.Registry
-	enableTools    bool
+	toolsEnabled   bool
 }
 
 // NewController loads configuration and prepares a provider instance.
@@ -185,7 +185,7 @@ func (c *Controller) resetMessagesLocked() error {
 		c.messages = append(c.messages, provider.Message{Role: "system", Content: zopInstructions})
 	}
 
-	if c.enableTools {
+	if c.toolsEnabled {
 		c.messages = append(c.messages, provider.Message{
 			Role:    "system",
 			Content: "You have access to tools. Use them ONLY when explicitly required by the user's request or necessary to fulfill it. If you can provide a high-quality response without tools, do so.",
@@ -209,7 +209,7 @@ func (c *Controller) SendPrompt(ctx context.Context, prompt string, streamFunc f
 	sessionMgr := c.sessionMgr
 	sessionName := c.sessionNameLocked()
 	registry := c.toolRegistry
-	enableTools := c.enableTools
+	toolsEnabled := c.toolsEnabled
 	c.mu.Unlock()
 
 	messages = append(messages, provider.Message{Role: "user", Content: prompt})
@@ -217,7 +217,7 @@ func (c *Controller) SendPrompt(ctx context.Context, prompt string, streamFunc f
 	var lastContent string
 	for {
 		var tools []provider.Tool
-		if enableTools {
+		if toolsEnabled {
 			tools = registry.List()
 		}
 		req := provider.CompletionRequest{
@@ -308,7 +308,6 @@ func (c *Controller) reloadProviderLocked() error {
 	} else if modelCfg.SystemPrompt != "" {
 		c.systemPrompt = modelCfg.SystemPrompt
 	}
-	c.enableTools = agent.EnableTools || c.cfg.EnableTools
 
 	// Reload tools/MCP
 	c.toolRegistry = tool.NewRegistry()
@@ -316,16 +315,19 @@ func (c *Controller) reloadProviderLocked() error {
 	if agent.ToolPolicy != nil {
 		policy = *agent.ToolPolicy
 	}
+	c.toolsEnabled = !agent.DisableTools && !c.cfg.DisableTools && len(policy.AllowList) > 0
+
 	c.toolRegistry.Register(&tool.RunCommandTool{
 		Policy: tool.NewPolicyChecker(policy),
 	})
+	checker := tool.NewPolicyChecker(policy)
 	for name, mcpCfg := range c.cfg.MCPServers {
 		mcpClient, err := mcp.NewClient(context.Background(), mcpCfg.URL, mcpCfg.Command, mcpCfg.Args...)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to connect to MCP server %q: %v\n", name, err)
 			continue
 		}
-		wrappers, err := mcp.WrapTools(context.Background(), mcpClient)
+		wrappers, err := mcp.WrapTools(context.Background(), mcpClient, checker)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to list tools for MCP server %q: %v\n", name, err)
 			continue

@@ -129,7 +129,7 @@ type AgentConfig struct {
 	Model        string      `toml:"model"`
 	SystemPrompt string      `toml:"system_prompt"`
 	ToolPolicy   *ToolPolicy `toml:"tool_policy,omitempty"`
-	EnableTools  bool        `toml:"enable_tools"`
+	DisableTools bool        `toml:"disable_tools"`
 }
 
 // ProviderConfig holds connection settings for an AI provider.
@@ -157,12 +157,12 @@ type ModelConfig struct {
 
 // Config is the top-level configuration structure.
 type Config struct {
-	Agents      map[string]AgentConfig     `toml:"agents"`
-	Providers   map[string]ProviderConfig  `toml:"providers"`
-	Models      map[string]ModelConfig     `toml:"models"`
-	MCPServers  map[string]MCPServerConfig `toml:"mcp_servers"`
-	ToolPolicy  ToolPolicy                 `toml:"tool_policy"`
-	EnableTools bool                       `toml:"enable_tools"`
+	Agents       map[string]AgentConfig     `toml:"agents"`
+	Providers    map[string]ProviderConfig  `toml:"providers"`
+	Models       map[string]ModelConfig     `toml:"models"`
+	MCPServers   map[string]MCPServerConfig `toml:"mcp_servers"`
+	ToolPolicy   ToolPolicy                 `toml:"tool_policy"`
+	DisableTools bool                       `toml:"disable_tools"`
 }
 
 // ToolPolicy defines allowlist and denylist for tool calls.
@@ -175,6 +175,7 @@ type ToolPolicy struct {
 
 // ToolEntry represents a pattern to match a tool call.
 type ToolEntry struct {
+	Tool       string   `toml:"tool,omitempty"`
 	Exact      []string `toml:"exact,omitempty"`
 	Regex      string   `toml:"regex,omitempty"`
 	RegexArray []string `toml:"regex_array,omitempty"`
