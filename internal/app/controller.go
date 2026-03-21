@@ -485,14 +485,14 @@ func ensureWhisperModelPath() error {
 	if _, ok := os.LookupEnv("ZOP_WHISPER_MODEL"); ok {
 		return nil
 	}
-	var configDir string
-	if d, err := os.UserConfigDir(); err == nil {
-		configDir = d
+	var cacheDir string
+	if d, err := os.UserCacheDir(); err == nil {
+		cacheDir = d
 	} else if h, err := os.UserHomeDir(); err == nil {
-		configDir = filepath.Join(h, ".config")
+		cacheDir = filepath.Join(h, ".cache")
 	} else {
-		configDir = "."
+		cacheDir = "."
 	}
-	modelPath := filepath.Join(configDir, "zop", "whisper", defaultWhisperModelFilename)
+	modelPath := filepath.Join(cacheDir, "zop", "whisper", defaultWhisperModelFilename)
 	return os.Setenv("ZOP_WHISPER_MODEL", modelPath)
 }

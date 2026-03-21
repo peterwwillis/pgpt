@@ -248,10 +248,6 @@ type RawConfig map[string]map[string]map[string]interface{}
 
 // DefaultConfigPath returns the OS-appropriate default config file path.
 func DefaultConfigPath() string {
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "zop", "config.toml")
-	}
-
 	// Try UserConfigDir first as it's more standard on modern systems.
 	if configDir, err := os.UserConfigDir(); err == nil {
 		return filepath.Join(configDir, "zop", "config.toml")

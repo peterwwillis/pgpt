@@ -195,8 +195,8 @@ func defaultModelPath() string {
 	if p := os.Getenv("ZOP_TTS_MODEL"); p != "" {
 		return p
 	}
-	if configDir, err := os.UserConfigDir(); err == nil {
-		return filepath.Join(configDir, "zop", "tts")
+	if cacheDir, err := os.UserCacheDir(); err == nil {
+		return filepath.Join(cacheDir, "zop", "tts")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

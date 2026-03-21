@@ -59,8 +59,8 @@ func defaultModelPath() string {
 	if p := os.Getenv("ZOP_WHISPER_MODEL"); p != "" {
 		return p
 	}
-	if configDir, err := os.UserConfigDir(); err == nil {
-		return filepath.Join(configDir, "zop", "whisper", "ggml-base.en.bin")
+	if cacheDir, err := os.UserCacheDir(); err == nil {
+		return filepath.Join(cacheDir, "zop", "whisper", "ggml-base.en.bin")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
