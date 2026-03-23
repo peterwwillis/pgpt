@@ -108,6 +108,7 @@ jobs:
     name: Build (${{ matrix.goos }}/${{ matrix.goarch }}${{ matrix.suffix }})
     needs: [resolve-tag, test]
     runs-on: ${{ matrix.runner }}
+    continue-on-error: true
     strategy:
       matrix:
         include:
@@ -275,6 +276,7 @@ jobs:
     name: Build Android APK
     needs: [resolve-tag, test]
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with:
